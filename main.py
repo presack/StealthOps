@@ -426,13 +426,21 @@ def run_console(args: argparse.Namespace) -> int:
 
     while True:
         try:
-            raw = input("stealthops> ").strip()
+            raw_in = input("stealthops> ")
         except EOFError:
             print("")
             return 0
         except KeyboardInterrupt:
             print("")
             return 0
+
+        # Ctrl+L sends form-feed in many terminals.
+        if "\x0c" in raw_in and raw_in.replace("\x0c", "").strip() == "":
+            os.system("cls" if os.name == "nt" else "clear")
+            print("")
+            continue
+
+        raw = raw_in.strip()
 
         if not raw:
             continue
