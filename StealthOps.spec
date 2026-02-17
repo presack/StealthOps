@@ -1,8 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_submodules
 
 datas = []
+hiddenimports = []
 datas += collect_data_files('whois')
+hiddenimports += collect_submodules('uvicorn')
+hiddenimports += collect_submodules('fastapi')
+hiddenimports += collect_submodules('starlette')
 
 
 a = Analysis(
@@ -10,7 +15,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=[],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

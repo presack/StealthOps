@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import ipaddress
+import re
 import socket
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -171,8 +172,104 @@ class StealthQueryEngine:
                     continue
         return text
 
+    @staticmethod
+    def _raw_lines(raw_whois: str) -> list[str]:
+        return [line.rstrip() for line in str(raw_whois or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+
     @classmethod
-    def _build_contact_block(cls, data: dict[str, Any], title: str, prefixes: list[str]) -> list[str]:
+    def _raw_first_value(cls, raw_whois: str, labels: list[str]) -> str:
+        if not raw_whois:
+            return ""
+        labels_lc = [label.strip().lower() for label in labels if label.strip()]
+        for line in cls._raw_lines(raw_whois):
+            text = line.strip()
+            if ":" not in text:
+                continue
+            key, value = text.split(":", 1)
+            if key.strip().lower() in labels_lc:
+                out = value.strip()
+                if out:
+                    return out
+        return ""
+
+    @classmethod
+    def _raw_all_values(cls, raw_whois: str, labels: list[str]) -> list[str]:
+        if not raw_whois:
+            return []
+        labels_lc = [label.strip().lower() for label in labels if label.strip()]
+        out: list[str] = []
+        for line in cls._raw_lines(raw_whois):
+            text = line.strip()
+            if ":" not in text:
+                continue
+            key, value = text.split(":", 1)
+            if key.strip().lower() in labels_lc:
+                candidate = value.strip()
+                if candidate and candidate not in out:
+                    out.append(candidate)
+        return out
+
+    @classmethod
+    def _raw_section_lines(cls, raw_whois: str, headers: list[str]) -> list[str]:
+        if not raw_whois:
+            return []
+
+        def is_header(line: str) -> bool:
+            text = line.strip().rstrip(":")
+            if not text:
+                return False
+            return bool(re.match(r"^[A-Za-z][A-Za-z0-9 /&_-]{1,80}$", text))
+
+        lines = cls._raw_lines(raw_whois)
+        headers_lc = [h.lower().rstrip(":") for h in headers]
+        for i, line in enumerate(lines):
+            text = line.strip()
+            if not text.endswith(":"):
+                continue
+            candidate = text[:-1].strip().lower()
+            if candidate not in headers_lc:
+                continue
+
+            out: list[str] = []
+            j = i + 1
+            started = False
+            while j < len(lines):
+                nxt = lines[j].rstrip()
+                stripped = nxt.strip()
+                if not stripped:
+                    if started:
+                        break
+                    j += 1
+                    continue
+                if is_header(stripped) and stripped.endswith(":"):
+                    break
+                started = True
+                out.append(stripped)
+                j += 1
+            if out:
+                return out
+        return []
+
+    @classmethod
+    def _raw_name_servers(cls, raw_whois: str) -> list[str]:
+        out = cls._raw_all_values(raw_whois, ["Name Server", "nserver"])
+        section_values = cls._raw_section_lines(raw_whois, ["Name Servers"])
+        for value in section_values:
+            candidate = value.split()[0].strip()
+            if candidate and candidate not in out:
+                out.append(candidate)
+        return out
+
+    @classmethod
+    def _build_contact_block(
+        cls,
+        data: dict[str, Any],
+        title: str,
+        prefixes: list[str],
+        raw_whois: str,
+        raw_headers: list[str],
+        raw_label_roots: list[str],
+    ) -> list[str]:
         def k(name: str) -> list[str]:
             out = [name]
             for prefix in prefixes:
@@ -181,15 +278,48 @@ class StealthQueryEngine:
                     out.append(f"{prefix}_{name}")
             return out
 
+        section_values = cls._raw_section_lines(raw_whois, raw_headers)
+        if section_values:
+            lines = [f"{title}:"]
+            for value in section_values:
+                lines.append(f"\t{value}")
+            lines.append("")
+            return lines
+
+        def raw_labels(suffixes: list[str]) -> list[str]:
+            labels: list[str] = []
+            for root in raw_label_roots:
+                for suffix in suffixes:
+                    labels.append(f"{root} {suffix}".strip())
+            return labels
+
         name = cls._first_non_empty(data, k("name"))
+        if not name:
+            name = cls._raw_first_value(raw_whois, raw_labels(["Name", "Contact", "Contact Name"]))
         org = cls._first_non_empty(data, k("organization") + k("org"))
+        if not org:
+            org = cls._raw_first_value(raw_whois, raw_labels(["Organization", "Org"]))
         street = cls._first_non_empty(data, k("street") + k("address"))
+        if not street:
+            street = cls._raw_first_value(raw_whois, raw_labels(["Street", "Address", "Address1"]))
         city = cls._first_non_empty(data, k("city"))
+        if not city:
+            city = cls._raw_first_value(raw_whois, raw_labels(["City"]))
         state = cls._first_non_empty(data, k("state") + k("province"))
+        if not state:
+            state = cls._raw_first_value(raw_whois, raw_labels(["State", "Province", "State/Province"]))
         postal = cls._first_non_empty(data, k("postal_code") + k("postcode") + k("zipcode"))
+        if not postal:
+            postal = cls._raw_first_value(raw_whois, raw_labels(["Postal Code", "Postcode", "Zip Code", "Zip"]))
         country = cls._first_non_empty(data, k("country"))
+        if not country:
+            country = cls._raw_first_value(raw_whois, raw_labels(["Country"]))
         phone = cls._first_non_empty(data, k("phone"))
+        if not phone:
+            phone = cls._raw_first_value(raw_whois, raw_labels(["Phone"]))
         email = cls._first_non_empty(data, k("email") + k("emails"))
+        if not email:
+            email = cls._raw_first_value(raw_whois, raw_labels(["Email"]))
 
         lines: list[str] = [f"{title}:"]
         rendered = []
@@ -223,18 +353,62 @@ class StealthQueryEngine:
 
     @classmethod
     def _build_domain_whois_record(cls, data: dict[str, Any], domain_fallback: str) -> str:
+        raw_whois = str(data.get("raw_whois", "") or "")
         domain_name = cls._first_non_empty(data, ["domain_name", "domain"]) or domain_fallback
+        if not domain_name:
+            domain_name = cls._raw_first_value(raw_whois, ["Domain Name"]) or domain_fallback
         name_servers = cls._list_non_empty(data, ["name_servers"])
+        if not name_servers:
+            name_servers = cls._raw_name_servers(raw_whois)
         creation = cls._format_whois_date(data.get("creation_date"))
+        if not creation:
+            creation = cls._format_whois_date(
+                cls._raw_first_value(raw_whois, ["Creation Date", "Registered On", "Domain record activated"])
+            )
         updated = cls._format_whois_date(data.get("updated_date"))
+        if not updated:
+            updated = cls._format_whois_date(
+                cls._raw_first_value(raw_whois, ["Updated Date", "Last Updated On", "Domain record last updated"])
+            )
         expiration = cls._format_whois_date(data.get("expiration_date"))
+        if not expiration:
+            expiration = cls._format_whois_date(
+                cls._raw_first_value(raw_whois, ["Registry Expiry Date", "Expiration Date", "Domain expires"])
+            )
 
         lines: list[str] = []
         lines.append(f"Domain Name: {str(domain_name).upper()}")
         lines.append("")
-        lines.extend(cls._build_contact_block(data, "Registrant", ["registrant_", ""]))
-        lines.extend(cls._build_contact_block(data, "Administrative Contact", ["admin_", "administrative_", ""]))
-        lines.extend(cls._build_contact_block(data, "Technical Contact", ["tech_", "technical_", ""]))
+        lines.extend(
+            cls._build_contact_block(
+                data,
+                "Registrant",
+                ["registrant_", ""],
+                raw_whois,
+                ["Registrant", "Registrant Contact"],
+                ["Registrant"],
+            )
+        )
+        lines.extend(
+            cls._build_contact_block(
+                data,
+                "Administrative Contact",
+                ["admin_", "administrative_", ""],
+                raw_whois,
+                ["Administrative Contact", "Admin Contact"],
+                ["Admin", "Administrative Contact", "Administrative"],
+            )
+        )
+        lines.extend(
+            cls._build_contact_block(
+                data,
+                "Technical Contact",
+                ["tech_", "technical_", ""],
+                raw_whois,
+                ["Technical Contact", "Tech Contact"],
+                ["Tech", "Technical Contact", "Technical"],
+            )
+        )
 
         lines.append("Name Servers:")
         if name_servers:
