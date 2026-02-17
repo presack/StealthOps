@@ -170,6 +170,46 @@ class StealthQueryEngine:
                 normalized["status"] = sorted(set(compact))
         if raw_chunks:
             normalized["raw_whois"] = "\n\n".join(raw_chunks)
+            normalized["domain_whois_record"] = normalized["raw_whois"]
+        else:
+            lines: list[str] = []
+            ordered_fields = [
+                ("Domain Name", "domain_name"),
+                ("Registry Domain ID", "registry_domain_id"),
+                ("Registrar WHOIS Server", "whois_server"),
+                ("Registrar URL", "registrar_url"),
+                ("Updated Date", "updated_date"),
+                ("Creation Date", "creation_date"),
+                ("Registry Expiry Date", "expiration_date"),
+                ("Registrar", "registrar"),
+                ("Registrar IANA ID", "registrar_iana_id"),
+                ("Registrar Abuse Contact Email", "registrar_abuse_contact_email"),
+                ("Registrar Abuse Contact Phone", "registrar_abuse_contact_phone"),
+                ("Registrant Organization", "org"),
+                ("Registrant Country", "country"),
+                ("DNSSEC", "dnssec"),
+            ]
+            for label, key in ordered_fields:
+                value = normalized.get(key)
+                if value in (None, "", []):
+                    continue
+                if isinstance(value, list):
+                    lines.append(f"{label}: {', '.join(str(v) for v in value)}")
+                else:
+                    lines.append(f"{label}: {value}")
+            statuses = normalized.get("status")
+            if isinstance(statuses, list):
+                for status in statuses:
+                    lines.append(f"Domain Status: {status}")
+            elif statuses:
+                lines.append(f"Domain Status: {statuses}")
+            name_servers = normalized.get("name_servers")
+            if isinstance(name_servers, list):
+                for ns in name_servers:
+                    lines.append(f"Name Server: {ns}")
+            elif name_servers:
+                lines.append(f"Name Server: {name_servers}")
+            normalized["domain_whois_record"] = "\n".join(lines).strip()
         normalized["domain"] = domain
         return normalized
 

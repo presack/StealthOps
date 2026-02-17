@@ -25,7 +25,7 @@ It supports both CLI and web dashboard workflows and defaults to Tor-routed oper
   - HTTP header inspection
   - Raw record views:
     - Domain WHOIS record transcript (when available from provider/library)
-    - Network WHOIS RDAP payload
+    - Network WHOIS transcript-style record
 - Privacy UI indicator:
   - Green shield: Tor verified
   - Red shield: Tor unavailable, standard route in use
@@ -144,18 +144,38 @@ Expected JSON keys:
 - If no manifest is provided, updater discovers the latest Windows Tor Expert Bundle directly from `torproject.org` and resolves SHA256 from `sha256sums-signed-build.txt`.
 - `--tor-update-manifest` remains optional for advanced/self-hosted update workflows.
 
-## PyInstaller (single EXE)
+## Standalone EXE (no Python required for users)
 
-Build a standalone executable and bundle Tor folder contents:
+Build machine requirements (only for the person creating the EXE):
+
+```powershell
+pip install -r requirements.txt
+pip install pyinstaller
+```
+
+Create a single-file Windows executable and bundle Tor folder contents:
 
 ```powershell
 pyinstaller --onefile --name StealthOps --add-data "vendor\tor;tor" main.py
 ```
 
-Notes:
+Output:
+
+- `dist\StealthOps.exe`
+
+Run examples for end users (no venv required):
+
+```powershell
+.\dist\StealthOps.exe
+.\dist\StealthOps.exe --query example.com
+.\dist\StealthOps.exe --query example.com --public-route
+```
+
+Packaging notes:
 
 - Bundle the Tor directory, not only `tor.exe`, so companion files remain available.
 - On first run, bundled files are copied to managed runtime and launched from there.
+- If `vendor\tor` is not present at build time, users can still run with `--public-route` or install Tor separately.
 
 ## Privacy Notes
 

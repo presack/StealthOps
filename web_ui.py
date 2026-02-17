@@ -94,18 +94,6 @@ def build_app(
         network_whois_data = results.get("network_whois", {})
         header_data = results.get("headers", {})
 
-        whois_summary = {
-            key: whois_data.get(key)
-            for key in [
-                "domain_name",
-                "registrar",
-                "creation_date",
-                "expiration_date",
-                "status",
-                "whois_error",
-            ]
-            if key in whois_data
-        }
         address_summary = {
             key: address_data.get(key)
             for key in [
@@ -117,42 +105,69 @@ def build_app(
             ]
             if key in address_data
         }
-        network_whois_summary = {
-            key: network_whois_data.get(key)
+        whois_summary = {
+            key: whois_data.get(key)
             for key in [
-                "ip",
-                "organization",
-                "net_name",
-                "cidr",
-                "start_address",
-                "end_address",
+                "domain_name",
+                "registry_domain_id",
+                "whois_server",
+                "registrar_url",
+                "registrar",
+                "registrar_iana_id",
+                "registrar_abuse_contact_email",
+                "registrar_abuse_contact_phone",
+                "creation_date",
+                "updated_date",
+                "expiration_date",
+                "org",
                 "country",
-                "ip_version",
-                "net_type",
-                "abuse_email",
-                "abuse_phone",
-                "rdap_url",
-                "network_whois_warning",
-                "network_whois_error",
+                "name_servers",
+                "status",
+                "dnssec",
+                "whois_error",
             ]
-            if key in network_whois_data
+            if key in whois_data
         }
-        domain_raw_whois = str(whois_data.get("raw_whois", "")).strip()
+        domain_whois_record = str(whois_data.get("domain_whois_record", "")).strip()
         network_whois_record = str(network_whois_data.get("network_whois_record", "")).strip()
+        network_notice = str(network_whois_data.get("network_whois_warning") or network_whois_data.get("network_whois_error") or "").strip()
 
-        mx_rows = ""
-        for item in mx_data.get("mx", []):
-            mx_rows += (
+        dns_rows = []
+        domain = str(dns_data.get("domain", "-"))
+        for rtype, key in (
+            ("A", "a"),
+            ("AAAA", "aaaa"),
+            ("NS", "ns"),
+            ("TXT", "txt"),
+            ("CNAME", "cname"),
+            ("CAA", "caa"),
+            ("SOA", "soa"),
+        ):
+            values = dns_data.get(key, [])
+            for value in values:
+                dns_rows.append(
+                    "<tr>"
+                    f"<td class='py-1 pr-3 break-all'>{html.escape(domain)}</td>"
+                    "<td class='py-1 pr-3'>IN</td>"
+                    f"<td class='py-1 pr-3'>{rtype}</td>"
+                    f"<td class='py-1 break-all'>{html.escape(str(value))}</td>"
+                    "<td class='py-1 text-slate-400'>-</td>"
+                    "</tr>"
+                )
+        for mx in mx_data.get("mx", []):
+            priority = mx.get("priority")
+            host = mx.get("host", "-")
+            data_value = f"{priority} {host}" if priority is not None else str(host)
+            dns_rows.append(
                 "<tr>"
-                f"<td class='py-1 pr-3'>{html.escape(str(item.get('priority', '-')))}</td>"
-                f"<td class='py-1'>{html.escape(str(item.get('host', '-')))}</td>"
+                f"<td class='py-1 pr-3 break-all'>{html.escape(domain)}</td>"
+                "<td class='py-1 pr-3'>IN</td>"
+                "<td class='py-1 pr-3'>MX</td>"
+                f"<td class='py-1 break-all'>{html.escape(data_value)}</td>"
+                "<td class='py-1 text-slate-400'>-</td>"
                 "</tr>"
             )
-        if not mx_rows:
-            mx_rows = "<tr><td class='py-1 pr-3' colspan='2'>No MX records</td></tr>"
-
-        ns_rows = "".join(f"<li>{html.escape(str(v))}</li>" for v in dns_data.get("ns", [])) or "<li>None</li>"
-        txt_rows = "".join(f"<li class='break-all'>{html.escape(str(v))}</li>" for v in dns_data.get("txt", [])) or "<li>None</li>"
+        dns_records_html = "".join(dns_rows) if dns_rows else "<tr><td class='py-1 pr-3' colspan='5'>No DNS records</td></tr>"
 
         headers_rows = ""
         for key, value in header_data.get("headers", {}).items():
@@ -174,50 +189,30 @@ def build_app(
                 "</section>"
             )
 
-        domain = html.escape(str(dns_data.get("domain", "-")))
-        a_records = ", ".join(str(v) for v in dns_data.get("a", [])) or "-"
-
         whois_cmd = html.escape(f"whois {dns_data.get('domain', '<domain>')}")
-        dns_a_cmd = html.escape(f"dns lookup A {dns_data.get('domain', '<domain>')}")
-        dns_mx_cmd = html.escape(f"dns lookup MX {dns_data.get('domain', '<domain>')}")
-        dns_ns_cmd = html.escape(f"dns lookup NS {dns_data.get('domain', '<domain>')}")
-        dns_txt_cmd = html.escape(f"dns lookup TXT {dns_data.get('domain', '<domain>')}")
         http_cmd = html.escape(f"curl -I {header_data.get('url', '<url>')}")
 
         return f"""
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-6'>
-  <h3 class='font-semibold mb-2'>Address Lookup</h3>
+  <h3 class='font-semibold mb-2'>Address lookup</h3>
   <table class='text-sm w-full'><tbody>{render_kv_rows(address_summary)}</tbody></table>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
-  <h3 class='font-semibold mb-2' title='{whois_cmd}'>WHOIS</h3>
+  <h3 class='font-semibold mb-2' title='{whois_cmd}'>Domain Whois summary</h3>
   <table class='text-sm w-full'><tbody>{render_kv_rows(whois_summary)}</tbody></table>
 </section>
-{"<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Domain WHOIS Record</h3><pre class='bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-xs whitespace-pre-wrap'>" + html.escape(domain_raw_whois) + "</pre></section>" if domain_raw_whois else ""}
+{"<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Domain Whois record</h3><pre class='bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-xs whitespace-pre-wrap'>" + html.escape(domain_whois_record) + "</pre></section>" if domain_whois_record else ""}
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
-  <h3 class='font-semibold mb-2' title='{dns_a_cmd}'>DNS Summary</h3>
-  <p class='text-sm'><span class='text-slate-400'>Domain:</span> {domain}</p>
-  <p class='text-sm break-all'><span class='text-slate-400'>A Record(s):</span> {html.escape(a_records)}</p>
+  <h3 class='font-semibold mb-2'>Network Whois record</h3>
+  {"<p class='text-amber-300 text-xs mb-2'>" + html.escape(network_notice) + "</p>" if network_notice else ""}
+  <pre class='bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-xs whitespace-pre-wrap'>{html.escape(network_whois_record or "No network whois record available.")}</pre>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
-  <h3 class='font-semibold mb-2' title='{dns_mx_cmd}'>MX Records</h3>
+  <h3 class='font-semibold mb-2'>DNS records</h3>
   <table class='text-sm w-full'>
-    <thead><tr><th class='text-left py-1 pr-3 text-slate-400'>Priority</th><th class='text-left py-1 text-slate-400'>Host</th></tr></thead>
-    <tbody>{mx_rows}</tbody>
+    <thead><tr><th class='text-left py-1 pr-3 text-slate-400'>Name</th><th class='text-left py-1 pr-3 text-slate-400'>Class</th><th class='text-left py-1 pr-3 text-slate-400'>Type</th><th class='text-left py-1 text-slate-400'>Data</th><th class='text-left py-1 pl-3 text-slate-400'>TTL</th></tr></thead>
+    <tbody>{dns_records_html}</tbody>
   </table>
-</section>
-<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
-  <h3 class='font-semibold mb-2'>Network WHOIS</h3>
-  <table class='text-sm w-full'><tbody>{render_kv_rows(network_whois_summary)}</tbody></table>
-</section>
-{"<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Network WHOIS Record</h3><pre class='bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-xs whitespace-pre-wrap'>" + html.escape(network_whois_record) + "</pre></section>" if network_whois_record else ""}
-<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
-  <h3 class='font-semibold mb-2' title='{dns_ns_cmd}'>NS Records</h3>
-  <ul class='list-disc pl-5 text-sm space-y-1'>{ns_rows}</ul>
-</section>
-<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
-  <h3 class='font-semibold mb-2' title='{dns_txt_cmd}'>TXT Records</h3>
-  <ul class='list-disc pl-5 text-sm space-y-1'>{txt_rows}</ul>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2' title='{http_cmd}'>HTTP Headers</h3>
