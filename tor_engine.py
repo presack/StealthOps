@@ -60,8 +60,23 @@ class TorEngine:
         except OSError:
             return False
 
+    def _discover_active_proxy(self) -> bool:
+        preferred_ports = [self.socks_port, 9150, 9050]
+        seen: set[int] = set()
+        for port in preferred_ports:
+            if port in seen:
+                continue
+            seen.add(port)
+            if self._port_open(self.socks_host, port):
+                self.socks_port = port
+                # Typical Tor Browser / Tor daemon defaults.
+                self.control_port = 9151 if port == 9150 else 9051
+                self.last_update_message = f"using existing tor socks proxy on {self.socks_host}:{port}"
+                return True
+        return False
+
     def is_proxy_running(self) -> bool:
-        return self._port_open(self.socks_host, self.socks_port)
+        return self._discover_active_proxy()
 
     def _system_tor_candidates(self) -> list[Path]:
         candidates: list[Path] = []
@@ -148,7 +163,7 @@ class TorEngine:
         return selected
 
     def start_tor(self, timeout: int = 45) -> bool:
-        if self.is_proxy_running():
+        if self._discover_active_proxy():
             self.last_error = None
             return True
 
@@ -185,7 +200,7 @@ class TorEngine:
         return False
 
     def verify_circuit(self, timeout: int = 12) -> bool:
-        if not self.is_proxy_running():
+        if not self._discover_active_proxy():
             self.last_error = "tor proxy unavailable"
             return False
 

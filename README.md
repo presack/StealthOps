@@ -9,7 +9,7 @@ It supports both CLI and web dashboard workflows and defaults to Tor-routed oper
   - CLI mode when `--query` is provided
   - Web mode when no query argument is provided
 - Automated Tor lifecycle with `stem`:
-  - Detect existing Tor SOCKS proxy (`127.0.0.1:9050`)
+  - Detect existing Tor SOCKS proxy (`127.0.0.1:9050` or `127.0.0.1:9150`)
   - Attempt background Tor launch if unavailable
   - Verify Tor circuit before routed requests
 - Managed Tor runtime:
