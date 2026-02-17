@@ -94,6 +94,7 @@ Web controls:
 - Header controls:
   - `Public Mode` (default, fast route)
   - `Stealth Mode` (Tor-routed when available)
+  - `Quick: On/Off` (skip heavy lookups for faster triage)
 - Stealth mode is fail-closed by default in web mode (non-Tor fallback disabled).
 - `Install / Update Managed Tor`: appears when Stealth Mode is selected and Tor is not verified.
 - Install/update flow shows the official source URL first and requires confirmation before downloading.
@@ -115,6 +116,12 @@ Default CLI output is formatted for readability. Use raw JSON when needed:
 
 ```powershell
 python main.py example.com --json
+```
+
+Quick mode (faster triage):
+
+```powershell
+python main.py example.com --quick
 ```
 
 Force strict privacy behavior:
@@ -184,6 +191,7 @@ Console commands:
 - `status`
 - `block <on|off>`
 - `json <on|off>`
+- `quick <on|off>`
 - `clear`
 - `exit`
 

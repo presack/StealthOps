@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import ipaddress
 import socket
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from tor_engine import TorEngine
 class QueryConfig:
     block_non_tor: bool = False
     route_mode: str = "stealth"
+    quick_mode: bool = False
 
 
 class StealthQueryEngine:
@@ -568,13 +570,46 @@ class StealthQueryEngine:
             whois_target = lookup_target
             address_data = {}
 
-        dns_data = self.dns_lookup(dns_target) if not self._is_ip(dns_target) else self._empty_dns_payload(dns_target)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            dns_future = (
+                pool.submit(self.dns_lookup, dns_target)
+                if not self._is_ip(dns_target)
+                else None
+            )
+            mx_future = (
+                pool.submit(self.mx_lookup, whois_target or dns_target)
+                if not self._is_ip(whois_target or dns_target)
+                else None
+            )
+            whois_future = (
+                pool.submit(self.whois_lookup, whois_target)
+                if whois_target
+                else None
+            )
+            header_future = pool.submit(self.header_inspect, target)
+
+            dns_data = dns_future.result() if dns_future else self._empty_dns_payload(dns_target)
+            mx_data = mx_future.result() if mx_future else {"domain": dns_target, "mx": []}
+            whois_data = whois_future.result() if whois_future else {"whois_error": "unable to derive domain for whois from IP target"}
+            headers_data = header_future.result()
+
+        if self.config.quick_mode:
+            return {
+                "address": address_data,
+                "dns": dns_data,
+                "mx": mx_data,
+                "whois": {"whois_notice": "skipped in quick mode"},
+                "network_whois": {"network_whois_notice": "skipped in quick mode"},
+                "headers": {"header_notice": "skipped in quick mode", "url": target, "tor_routed": self.config.route_mode == "stealth"},
+            }
 
         if is_ip:
             try:
                 reverse_name = ".".join(reversed(lookup_target.split("."))) + ".in-addr.arpa"
-                ptr_vals = self._doh_query(reverse_name, "PTR")
-                dns_data["ptr"] = ptr_vals
+                if self.config.route_mode == "public":
+                    dns_data["ptr"] = self._resolver_query(reverse_name, "PTR", lifetime=8)
+                else:
+                    dns_data["ptr"] = self._doh_query(reverse_name, "PTR")
             except Exception as ptr_exc:
                 dns_data["ptr_error"] = str(ptr_exc)
 
@@ -589,19 +624,13 @@ class StealthQueryEngine:
         if not address_data:
             address_data = self.address_lookup(lookup_target, dns_data)
 
-        if whois_target:
-            whois_data = self.whois_lookup(whois_target)
-        else:
-            whois_data = {"whois_error": "unable to derive domain for whois from IP target"}
-
-        mx_data = self.mx_lookup(whois_target or dns_target) if not self._is_ip(whois_target or dns_target) else {"domain": dns_target, "mx": []}
         return {
             "address": address_data,
             "dns": dns_data,
             "mx": mx_data,
             "whois": whois_data,
             "network_whois": self.network_whois_lookup(dns_data, ip_override=network_ip),
-            "headers": self.header_inspect(target),
+            "headers": headers_data,
         }
     @staticmethod
     def _normalize_lookup_target(target: str) -> str:

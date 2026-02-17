@@ -31,7 +31,9 @@ def human_label(key: str) -> str:
         "registrar_iana_id": "Registrar IANA ID",
         "status": "Domain Status",
         "whois_error": "WHOIS Error",
+        "whois_notice": "WHOIS Notice",
         "network_whois_error": "Network WHOIS Error",
+        "network_whois_notice": "Network WHOIS Notice",
         "network_whois_warning": "Network WHOIS Warning",
         "net_name": "Net Name",
         "net_handle": "Net Handle",
@@ -46,6 +48,7 @@ def human_label(key: str) -> str:
         "tor_routed": "Tor Routed",
         "status_code": "Status Code",
         "final_url": "Final URL",
+        "header_notice": "Header Notice",
     }
     if key in labels:
         return labels[key]
@@ -81,8 +84,8 @@ def build_app(
             else:
                 value_str = str(value) if value not in (None, "") else "-"
             rows.append(
-                f"<tr><td class='py-1 pr-3 text-slate-400'>{html.escape(human_label(str(key)))}</td>"
-                f"<td class='py-1 text-slate-100 break-all'>{html.escape(value_str)}</td></tr>"
+                f"<tr><td class='py-1 pr-3 align-top w-56 text-slate-400'>{html.escape(human_label(str(key)))}</td>"
+                f"<td class='py-1 pl-2 align-top text-slate-100 break-all'>{html.escape(value_str)}</td></tr>"
             )
         return "".join(rows)
 
@@ -124,6 +127,7 @@ def build_app(
                 "country",
                 "name_servers",
                 "status",
+                "whois_notice",
                 "dnssec",
                 "whois_error",
             ]
@@ -131,7 +135,12 @@ def build_app(
         }
         domain_whois_record = str(whois_data.get("domain_whois_record", "")).strip()
         network_whois_record = str(network_whois_data.get("network_whois_record", "")).strip()
-        network_notice = str(network_whois_data.get("network_whois_warning") or network_whois_data.get("network_whois_error") or "").strip()
+        network_notice = str(
+            network_whois_data.get("network_whois_notice")
+            or network_whois_data.get("network_whois_warning")
+            or network_whois_data.get("network_whois_error")
+            or ""
+        ).strip()
         dns_notices = []
         for key in sorted(k for k in dns_data.keys() if k.endswith("_error")):
             dns_notices.append(f"DNS query issue ({key}): {dns_data.get(key)}")
@@ -230,6 +239,7 @@ def build_app(
       <tr><td class='py-1 pr-3 text-slate-400'>Status Code</td><td class='py-1'>{html.escape(str(header_data.get('status_code', '-')))}</td></tr>
       <tr><td class='py-1 pr-3 text-slate-400'>Final URL</td><td class='py-1 break-all'>{html.escape(str(header_data.get('final_url', '-')))}</td></tr>
       <tr><td class='py-1 pr-3 text-slate-400'>Tor Routed</td><td class='py-1'>{html.escape(str(header_data.get('tor_routed', '-')))}</td></tr>
+      <tr><td class='py-1 pr-3 text-slate-400'>Header Notice</td><td class='py-1 break-all'>{html.escape(str(header_data.get('header_notice', '-')))}</td></tr>
     </tbody>
   </table>
   <table class='text-sm w-full mt-3'>
@@ -244,6 +254,7 @@ def build_app(
         results: dict | None = None,
         target: str = "",
         route_mode: str = "public",
+        quick_mode: bool = False,
         error: str = "",
         notice: str = "",
         update_source: str = "",
@@ -268,6 +279,9 @@ def build_app(
         public_active = "bg-cyan-600 text-white" if route_mode == "public" else "bg-slate-700 text-slate-200"
         switch_to = "stealth" if route_mode == "public" else "public"
         switch_label = "Switch to Stealth Mode" if route_mode == "public" else "Switch to Public Mode"
+        quick_switch_to = "0" if quick_mode else "1"
+        quick_switch_label = "Quick: On" if quick_mode else "Quick: Off"
+        quick_switch_class = "text-emerald-300" if quick_mode else "text-slate-300"
         tor_manage = ""
         if route_mode == "stealth" and not stealth_ready:
             tor_manage = f"""
@@ -312,6 +326,10 @@ def build_app(
           <input type='hidden' name='route_mode' value='{html.escape(switch_to)}' />
           <button class='text-sm underline text-slate-300 hover:text-white'>{html.escape(switch_label)}</button>
         </form>
+        <form method='post' action='/quick'>
+          <input type='hidden' name='quick_mode' value='{html.escape(quick_switch_to)}' />
+          <button class='text-sm underline {quick_switch_class} hover:text-white'>{html.escape(quick_switch_label)}</button>
+        </form>
       </div>
     </header>
 
@@ -325,9 +343,10 @@ def build_app(
           <input name='target' value='{html.escape(target)}' required class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2' />
         </div>
         <input type='hidden' name='route_mode' value='{html.escape(route_mode)}' />
+        <input type='hidden' name='quick_mode' value='{"1" if quick_mode else "0"}' />
         <div class='flex gap-3'>
           <button class='px-4 py-2 rounded-lg font-semibold text-white {run_button_class}'>{html.escape(run_button_label)}</button>
-          <span class='self-center text-xs text-slate-400'>{"Tor-routed where available." if route_mode == "stealth" else "Fast public route."}</span>
+          <span class='self-center text-xs text-slate-400'>{"Quick mode enabled." if quick_mode else ("Tor-routed where available." if route_mode == "stealth" else "Fast public route.")}</span>
         </div>
       </form>
       {error_html}
@@ -349,6 +368,7 @@ def build_app(
         return HTMLResponse(
             render_page(
                 route_mode=query_engine.config.route_mode,
+                quick_mode=query_engine.config.quick_mode,
                 update_source=tor_engine.preview_update_source(),
             )
         )
@@ -367,6 +387,20 @@ def build_app(
         return HTMLResponse(
             render_page(
                 route_mode=selected,
+                quick_mode=query_engine.config.quick_mode,
+                notice=notice,
+                update_source=tor_engine.preview_update_source(),
+            )
+        )
+
+    @app.post("/quick", response_class=HTMLResponse)
+    async def set_quick_mode(quick_mode: str = Form("0")) -> HTMLResponse:
+        query_engine.config.quick_mode = quick_mode == "1"
+        notice = f"Quick mode {'enabled' if query_engine.config.quick_mode else 'disabled'}."
+        return HTMLResponse(
+            render_page(
+                route_mode=query_engine.config.route_mode,
+                quick_mode=query_engine.config.quick_mode,
                 notice=notice,
                 update_source=tor_engine.preview_update_source(),
             )
@@ -376,8 +410,10 @@ def build_app(
     async def query(
         target: str = Form(...),
         route_mode: str = Form("public"),
+        quick_mode: str = Form("0"),
     ) -> HTMLResponse:
         query_engine.config.route_mode = "stealth" if route_mode == "stealth" else "public"
+        query_engine.config.quick_mode = quick_mode == "1"
         query_engine.config.block_non_tor = query_engine.config.route_mode == "stealth"
         if query_engine.config.route_mode == "stealth":
             tor_engine.ensure_tor()
@@ -391,6 +427,7 @@ def build_app(
                     results=results,
                     target=target,
                     route_mode=query_engine.config.route_mode,
+                    quick_mode=query_engine.config.quick_mode,
                     notice=notice,
                     update_source=tor_engine.preview_update_source(),
                 )
@@ -400,6 +437,7 @@ def build_app(
                 render_page(
                     target=target,
                     route_mode=query_engine.config.route_mode,
+                    quick_mode=query_engine.config.quick_mode,
                     error=str(exc),
                     update_source=tor_engine.preview_update_source(),
                 )
@@ -417,6 +455,7 @@ def build_app(
         return HTMLResponse(
             render_page(
                 route_mode="stealth",
+                quick_mode=query_engine.config.quick_mode,
                 notice=message,
                 update_source=tor_engine.preview_update_source(),
             )

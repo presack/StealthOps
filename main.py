@@ -32,7 +32,9 @@ def human_label(key: str) -> str:
         "final_url": "Final URL",
         "tor_routed": "Tor Routed",
         "whois_error": "WHOIS Error",
+        "whois_notice": "WHOIS Notice",
         "network_whois_error": "Network WHOIS Error",
+        "network_whois_notice": "Network WHOIS Notice",
         "network_whois_warning": "Network WHOIS Warning",
         "net_name": "Net Name",
         "net_type": "Net Type",
@@ -42,6 +44,7 @@ def human_label(key: str) -> str:
         "abuse_email": "Abuse Email",
         "abuse_phone": "Abuse Phone",
         "rdap_url": "RDAP URL",
+        "header_notice": "Header Notice",
     }
     if key in labels:
         return labels[key]
@@ -103,6 +106,11 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
         help="Emit raw JSON results in CLI mode",
     )
     parser.add_argument(
+        "--quick",
+        action="store_true",
+        help="Quick mode: skip heavy lookups (WHOIS, Network WHOIS, Headers)",
+    )
+    parser.add_argument(
         "--no-color",
         action="store_true",
         help="Disable ANSI colors in console mode",
@@ -140,7 +148,7 @@ def format_cli_report(result: dict) -> str:
 
     lines.append("")
     lines.append("=== WHOIS ===  [source: whois <domain>]")
-    for field in ["domain_name", "registrar", "creation_date", "expiration_date", "status", "whois_error"]:
+    for field in ["domain_name", "registrar", "creation_date", "expiration_date", "status", "whois_notice", "whois_error"]:
         if field in whois_data:
             value = whois_data[field]
             if isinstance(value, list):
@@ -182,6 +190,7 @@ def format_cli_report(result: dict) -> str:
         "abuse_email",
         "abuse_phone",
         "rdap_url",
+        "network_whois_notice",
         "network_whois_warning",
         "network_whois_error",
     ]:
@@ -215,6 +224,8 @@ def format_cli_report(result: dict) -> str:
     lines.append(f"Status Code: {headers_data.get('status_code', '-')}")
     lines.append(f"Final URL: {headers_data.get('final_url', '-')}")
     lines.append(f"Tor Routed: {headers_data.get('tor_routed', '-')}")
+    if "header_notice" in headers_data:
+        lines.append(f"header_notice: {headers_data.get('header_notice')}")
     if "header_error" in headers_data:
         lines.append(f"header_error: {headers_data.get('header_error')}")
     else:
@@ -350,16 +361,19 @@ def _render_status_lines(
 
     block_mode = "On" if query_engine.config.block_non_tor else "Off"
     output_mode = "JSON" if emit_json else "Pretty"
+    quick_mode = "On" if query_engine.config.quick_mode else "Off"
     route_disp = _c(use_color, route, "96" if route == "Stealth" else "93")
     tor_disp = _c(use_color, tor_status, "92" if tor_ok and query_engine.config.route_mode == "stealth" else "93")
     block_disp = _c(use_color, block_mode, "91" if block_mode == "On" else "90")
     output_disp = _c(use_color, output_mode, "95" if output_mode == "JSON" else "97")
+    quick_disp = _c(use_color, quick_mode, "92" if quick_mode == "On" else "90")
 
     return (
         f"  > Route Mode ...................... [{route_disp}]\n"
         f"  > TOR Routing ..................... [{tor_disp}]\n"
         f"  > Block Non-TOR ................... [{block_disp}]\n"
-        f"  > Output Mode ..................... [{output_disp}]"
+        f"  > Output Mode ..................... [{output_disp}]\n"
+        f"  > Quick Mode ...................... [{quick_disp}]"
     )
 
 
@@ -383,6 +397,7 @@ def run_cli(args: argparse.Namespace) -> int:
         QueryConfig(
             block_non_tor=args.block_non_tor,
             route_mode=route_mode,
+            quick_mode=args.quick,
         ),
     )
 
@@ -401,6 +416,7 @@ def run_console(args: argparse.Namespace) -> int:
     route_mode = args.mode or "public"
     emit_json = bool(args.json)
     block_non_tor = bool(args.block_non_tor)
+    quick_mode = bool(args.quick)
 
     tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
     use_color = _color_enabled(args)
@@ -415,7 +431,7 @@ def run_console(args: argparse.Namespace) -> int:
 
     query_engine = StealthQueryEngine(
         tor_engine,
-        QueryConfig(block_non_tor=block_non_tor, route_mode=route_mode),
+        QueryConfig(block_non_tor=block_non_tor, route_mode=route_mode, quick_mode=quick_mode),
     )
 
     os.system("cls" if os.name == "nt" else "clear")
@@ -467,6 +483,7 @@ def run_console(args: argparse.Namespace) -> int:
             print("  status                 print console status banner")
             print("  block <on|off>         set block non-tor mode")
             print("  json <on|off>          toggle JSON output")
+            print("  quick <on|off>         toggle quick mode")
             print("  clear                  clear the screen")
             print("  exit                   quit console")
             print("")
@@ -566,6 +583,16 @@ def run_console(args: argparse.Namespace) -> int:
                 print("")
                 continue
             emit_json = parts[1].lower() == "on"
+            print(_render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print("")
+            continue
+        if cmd == "quick":
+            if len(parts) != 2 or parts[1].lower() not in {"on", "off"}:
+                print("usage: quick <on|off>")
+                print("")
+                continue
+            quick_mode = parts[1].lower() == "on"
+            query_engine.config.quick_mode = quick_mode
             print(_render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
             print("")
             continue
