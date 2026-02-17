@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 python -m pip install --upgrade pyinstaller
 
-$pyiArgs = @("--noconfirm", "--onefile", "--name", "StealthOps")
+$pyiArgs = @("--noconfirm", "--onefile", "--name", "StealthOps", "--collect-data", "whois")
 if (Test-Path ".\vendor\tor") {
     Write-Host "Bundling Tor runtime from .\vendor\tor"
     $pyiArgs += @("--add-data", "vendor\tor;tor")
