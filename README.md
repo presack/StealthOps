@@ -101,6 +101,18 @@ Force strict privacy behavior:
 python main.py --query example.com --block-non-tor
 ```
 
+Run without Tor (public route):
+
+```powershell
+python main.py --query example.com --public-route
+```
+
+Run without Tor and emit raw JSON:
+
+```powershell
+python main.py --query example.com --public-route --json
+```
+
 Tor update controls:
 
 ```powershell

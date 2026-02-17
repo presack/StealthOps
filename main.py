@@ -48,6 +48,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="StealthOps - privacy-hardened reconnaissance utility")
     parser.add_argument("--query", help="Domain/URL target for CLI mode")
     parser.add_argument(
+        "--public-route",
+        action="store_true",
+        help="Bypass Tor and run queries over standard network route",
+    )
+    parser.add_argument(
         "--block-non-tor",
         action="store_true",
         help="Fail requests if Tor is unavailable",
@@ -111,11 +116,6 @@ def format_cli_report(result: dict) -> str:
             if isinstance(value, list):
                 value = ", ".join(str(v) for v in value) if value else "-"
             lines.append(f"{human_label(field)}: {value}")
-    raw_whois = str(whois_data.get("raw_whois", "")).strip()
-    if raw_whois:
-        lines.append("")
-        lines.append("=== DOMAIN WHOIS RECORD ===")
-        lines.append(raw_whois)
 
     lines.append("")
     lines.append("=== DNS SUMMARY ===  [source: dns query A/AAAA]")
@@ -160,11 +160,6 @@ def format_cli_report(result: dict) -> str:
             if isinstance(value, list):
                 value = ", ".join(str(v) for v in value) if value else "-"
             lines.append(f"{human_label(field)}: {value}")
-    raw_rdap = str(network_whois_data.get("raw_rdap", "")).strip()
-    if raw_rdap:
-        lines.append("")
-        lines.append("=== NETWORK WHOIS RECORD ===")
-        lines.append(raw_rdap)
 
     lines.append("")
     lines.append("=== NS RECORDS ===  [source: dns query NS]")
@@ -216,12 +211,21 @@ def run_cli(args: argparse.Namespace) -> int:
     if not args.query:
         return 1
 
+    route_mode = "public" if args.public_route else "stealth"
     tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
-    tor_ok = tor_engine.ensure_tor()
+    tor_ok = tor_engine.ensure_tor() if route_mode == "stealth" else False
 
-    query_engine = StealthQueryEngine(tor_engine, QueryConfig(block_non_tor=args.block_non_tor))
+    query_engine = StealthQueryEngine(
+        tor_engine,
+        QueryConfig(
+            block_non_tor=args.block_non_tor,
+            route_mode=route_mode,
+        ),
+    )
 
     print(f"[privacy] tor_verified={tor_ok}")
+    if route_mode == "public":
+        print("[privacy] route_mode=public")
     if tor_engine.last_update_message:
         print(f"[privacy] tor_runtime={tor_engine.last_update_message}")
     if tor_engine.last_error:
