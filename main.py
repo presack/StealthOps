@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
+import sys
 from typing import Callable
 
 import uvicorn
@@ -47,6 +49,16 @@ def human_label(key: str) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="StealthOps - privacy-hardened reconnaissance utility")
     parser.add_argument("--query", help="Domain/URL target for CLI mode")
+    parser.add_argument(
+        "--console",
+        action="store_true",
+        help="Run interactive console mode",
+    )
+    parser.add_argument(
+        "--install-tor",
+        action="store_true",
+        help="Install/update managed Tor runtime before query execution",
+    )
     parser.add_argument(
         "--public-route",
         action="store_true",
@@ -207,13 +219,51 @@ def format_cli_report(result: dict) -> str:
     return "\n".join(lines)
 
 
+def _interactive_stdio() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _maybe_prompt_install_tor(tor_engine: TorEngine) -> bool:
+    if not _interactive_stdio():
+        return False
+    try:
+        answer = input("Tor is unavailable. Install managed Tor now? [Y/n]: ").strip().lower()
+    except EOFError:
+        return False
+    if answer in ("", "y", "yes"):
+        print("[privacy] starting managed Tor install/update")
+        message = tor_engine.manage_tor_runtime(force_update=True)
+        print(f"[privacy] tor_runtime={message}")
+        return tor_engine.ensure_tor()
+    return False
+
+
+def _execute_query(query_engine: StealthQueryEngine, target: str, emit_json: bool) -> int:
+    try:
+        result = query_engine.run_all(target)
+        if emit_json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(format_cli_report(result))
+        return 0
+    except Exception as exc:
+        print(f"error: {exc}")
+        return 1
+
+
 def run_cli(args: argparse.Namespace) -> int:
     if not args.query:
         return 1
 
     route_mode = "public" if args.public_route else "stealth"
     tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
+    if args.install_tor:
+        print("[privacy] starting managed Tor install/update")
+        message = tor_engine.manage_tor_runtime(force_update=True)
+        print(f"[privacy] tor_runtime={message}")
     tor_ok = tor_engine.ensure_tor() if route_mode == "stealth" else False
+    if route_mode == "stealth" and not tor_ok and not args.install_tor and not args.block_non_tor:
+        tor_ok = _maybe_prompt_install_tor(tor_engine)
 
     query_engine = StealthQueryEngine(
         tor_engine,
@@ -231,16 +281,122 @@ def run_cli(args: argparse.Namespace) -> int:
     if tor_engine.last_error:
         print(f"[privacy] notice={tor_engine.last_error}")
 
-    try:
-        result = query_engine.run_all(args.query)
-        if args.json:
-            print(json.dumps(result, indent=2))
-        else:
-            print(format_cli_report(result))
-        return 0
-    except Exception as exc:
-        print(f"error: {exc}")
-        return 1
+    return _execute_query(query_engine, args.query, args.json)
+
+
+def run_console(args: argparse.Namespace) -> int:
+    route_mode = "public" if args.public_route else "stealth"
+    emit_json = bool(args.json)
+    block_non_tor = bool(args.block_non_tor)
+
+    tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
+    if args.install_tor:
+        print("[privacy] starting managed Tor install/update")
+        message = tor_engine.manage_tor_runtime(force_update=True)
+        print(f"[privacy] tor_runtime={message}")
+
+    tor_ok = tor_engine.ensure_tor() if route_mode == "stealth" else False
+    if route_mode == "stealth" and not tor_ok and not args.install_tor and not block_non_tor:
+        tor_ok = _maybe_prompt_install_tor(tor_engine)
+
+    query_engine = StealthQueryEngine(
+        tor_engine,
+        QueryConfig(block_non_tor=block_non_tor, route_mode=route_mode),
+    )
+
+    print("StealthOps console. Type 'help' for commands.")
+    print(f"[privacy] route_mode={route_mode} tor_verified={tor_ok}")
+
+    while True:
+        try:
+            raw = input("stealthops> ").strip()
+        except EOFError:
+            print("")
+            return 0
+        except KeyboardInterrupt:
+            print("")
+            return 0
+
+        if not raw:
+            continue
+
+        try:
+            parts = shlex.split(raw)
+        except ValueError as exc:
+            print(f"error: {exc}")
+            continue
+
+        cmd = parts[0].lower()
+        if cmd in {"exit", "quit"}:
+            return 0
+        if cmd == "help":
+            print("Commands:")
+            print("  query <target>         run lookup on target")
+            print("  mode <stealth|public>  set routing mode")
+            print("  tor install            install/update managed Tor runtime")
+            print("  tor status             show Tor status")
+            print("  block <on|off>         set block non-tor mode")
+            print("  json <on|off>          toggle JSON output")
+            print("  exit                   quit console")
+            continue
+        if cmd == "query":
+            if len(parts) < 2:
+                print("usage: query <target>")
+                continue
+            target = parts[1]
+            _execute_query(query_engine, target, emit_json)
+            continue
+        if cmd == "mode":
+            if len(parts) != 2 or parts[1].lower() not in {"stealth", "public"}:
+                print("usage: mode <stealth|public>")
+                continue
+            route_mode = parts[1].lower()
+            query_engine.config.route_mode = route_mode
+            if route_mode == "stealth":
+                tor_ok = tor_engine.ensure_tor()
+                if not tor_ok and not query_engine.config.block_non_tor:
+                    tor_ok = _maybe_prompt_install_tor(tor_engine)
+            else:
+                tor_ok = False
+            print(f"[privacy] route_mode={route_mode} tor_verified={tor_ok}")
+            continue
+        if cmd == "tor":
+            if len(parts) != 2 or parts[1].lower() not in {"install", "status"}:
+                print("usage: tor <install|status>")
+                continue
+            action = parts[1].lower()
+            if action == "install":
+                print("[privacy] starting managed Tor install/update")
+                message = tor_engine.manage_tor_runtime(force_update=True)
+                print(f"[privacy] tor_runtime={message}")
+                tor_ok = tor_engine.ensure_tor() if query_engine.config.route_mode == "stealth" else False
+                print(f"[privacy] tor_verified={tor_ok}")
+            else:
+                if query_engine.config.route_mode == "stealth":
+                    tor_ok = tor_engine.ensure_tor()
+                print(f"[privacy] route_mode={query_engine.config.route_mode} tor_verified={tor_ok}")
+                if tor_engine.last_update_message:
+                    print(f"[privacy] tor_runtime={tor_engine.last_update_message}")
+                if tor_engine.last_error:
+                    print(f"[privacy] notice={tor_engine.last_error}")
+            continue
+        if cmd == "block":
+            if len(parts) != 2 or parts[1].lower() not in {"on", "off"}:
+                print("usage: block <on|off>")
+                continue
+            block_non_tor = parts[1].lower() == "on"
+            query_engine.config.block_non_tor = block_non_tor
+            print(f"[privacy] block_non_tor={block_non_tor}")
+            continue
+        if cmd == "json":
+            if len(parts) != 2 or parts[1].lower() not in {"on", "off"}:
+                print("usage: json <on|off>")
+                continue
+            emit_json = parts[1].lower() == "on"
+            print(f"[output] json={emit_json}")
+            continue
+
+        print("unknown command. type 'help'")
 
 
 def run_web(args: argparse.Namespace) -> None:
@@ -254,6 +410,16 @@ def run_web(args: argparse.Namespace) -> None:
 
 def main() -> int:
     args = parse_args()
+
+    if args.install_tor and not args.query and not args.console:
+        tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
+        print("[privacy] starting managed Tor install/update")
+        message = tor_engine.manage_tor_runtime(force_update=True)
+        print(f"[privacy] tor_runtime={message}")
+        return 0
+
+    if args.console:
+        return run_console(args)
 
     if args.query:
         return run_cli(args)

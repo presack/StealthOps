@@ -89,6 +89,12 @@ Web controls:
 python main.py --query example.com
 ```
 
+Install/update managed Tor runtime from CLI:
+
+```powershell
+python main.py --install-tor
+```
+
 Default CLI output is formatted for readability. Use raw JSON when needed:
 
 ```powershell
@@ -113,6 +119,8 @@ Run without Tor and emit raw JSON:
 python main.py --query example.com --public-route --json
 ```
 
+If Tor is unavailable and you run stealth CLI mode, StealthOps will prompt to install managed Tor when running interactively.
+
 Tor update controls:
 
 ```powershell
@@ -126,6 +134,30 @@ Prefer system Tor:
 ```powershell
 python main.py --query example.com --prefer-system-tor
 ```
+
+### Interactive console mode
+
+Start console mode with persistent route preference:
+
+```powershell
+python main.py --console
+```
+
+Start console in public route mode:
+
+```powershell
+python main.py --console --public-route
+```
+
+Console commands:
+
+- `query <target>`
+- `mode <stealth|public>`
+- `tor install`
+- `tor status`
+- `block <on|off>`
+- `json <on|off>`
+- `exit`
 
 ## Update Manifest Format
 
@@ -159,6 +191,12 @@ Create a single-file Windows executable and bundle Tor folder contents:
 pyinstaller --onefile --name StealthOps --add-data "vendor\tor;tor" main.py
 ```
 
+Or use the helper script (auto-detects whether `vendor\tor` exists):
+
+```powershell
+.\build.ps1
+```
+
 Output:
 
 - `dist\StealthOps.exe`
@@ -176,6 +214,13 @@ Packaging notes:
 - Bundle the Tor directory, not only `tor.exe`, so companion files remain available.
 - On first run, bundled files are copied to managed runtime and launched from there.
 - If `vendor\tor` is not present at build time, users can still run with `--public-route` or install Tor separately.
+
+Optional: populate `vendor\tor` from an existing Tor Browser install before building:
+
+```powershell
+New-Item -ItemType Directory -Force .\vendor\tor | Out-Null
+Copy-Item "C:\Program Files\Tor Browser\Browser\TorBrowser\Tor\*" .\vendor\tor -Recurse -Force
+```
 
 ## Privacy Notes
 

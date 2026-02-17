@@ -1,10 +1,16 @@
 $ErrorActionPreference = "Stop"
 
-if (-not (Test-Path ".\vendor\tor")) {
-    Write-Warning "vendor\\tor not found. EXE will build, but no bundled Tor runtime will be included."
-}
-
 python -m pip install --upgrade pyinstaller
-pyinstaller --noconfirm --onefile --name StealthOps --add-data "vendor\tor;tor" main.py
+
+$pyiArgs = @("--noconfirm", "--onefile", "--name", "StealthOps")
+if (Test-Path ".\vendor\tor") {
+    Write-Host "Bundling Tor runtime from .\vendor\tor"
+    $pyiArgs += @("--add-data", "vendor\tor;tor")
+} else {
+    Write-Warning "vendor\\tor not found. Building lean EXE without bundled Tor runtime."
+}
+$pyiArgs += "main.py"
+
+pyinstaller @pyiArgs
 
 Write-Host "Build complete: .\dist\StealthOps.exe"
