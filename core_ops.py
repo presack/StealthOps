@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import ipaddress
 import socket
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import dns.resolver
@@ -20,7 +20,6 @@ from tor_engine import TorEngine
 class QueryConfig:
     block_non_tor: bool = False
     route_mode: str = "stealth"
-    quick_mode: bool = False
 
 
 class StealthQueryEngine:
@@ -546,8 +545,20 @@ class StealthQueryEngine:
             return {"url": target, "header_error": str(exc), "tor_routed": bool(proxies)}
 
     def run_all(self, target: str) -> dict[str, Any]:
+        return self.run_all_staged(target)
+
+    def run_all_staged(self, target: str, on_update: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+        def emit(snapshot: dict[str, Any]) -> None:
+            if not on_update:
+                return
+            try:
+                on_update(dict(snapshot))
+            except Exception:
+                pass
+
         lookup_target = self._normalize_lookup_target(target)
         is_ip = self._is_ip(lookup_target)
+        out: dict[str, Any] = {}
 
         dns_target = lookup_target
         whois_target = lookup_target
@@ -570,38 +581,53 @@ class StealthQueryEngine:
             whois_target = lookup_target
             address_data = {}
 
+        emit({"address": address_data} if address_data else {})
+
         with ThreadPoolExecutor(max_workers=4) as pool:
-            dns_future = (
-                pool.submit(self.dns_lookup, dns_target)
-                if not self._is_ip(dns_target)
-                else None
-            )
-            mx_future = (
-                pool.submit(self.mx_lookup, whois_target or dns_target)
-                if not self._is_ip(whois_target or dns_target)
-                else None
-            )
-            whois_future = (
-                pool.submit(self.whois_lookup, whois_target)
-                if whois_target
-                else None
-            )
+            dns_future = pool.submit(self.dns_lookup, dns_target) if not self._is_ip(dns_target) else None
+            mx_future = pool.submit(self.mx_lookup, whois_target or dns_target) if not self._is_ip(whois_target or dns_target) else None
+            whois_future = pool.submit(self.whois_lookup, whois_target) if whois_target else None
             header_future = pool.submit(self.header_inspect, target)
 
-            dns_data = dns_future.result() if dns_future else self._empty_dns_payload(dns_target)
-            mx_data = mx_future.result() if mx_future else {"domain": dns_target, "mx": []}
-            whois_data = whois_future.result() if whois_future else {"whois_error": "unable to derive domain for whois from IP target"}
-            headers_data = header_future.result()
+            future_map = {}
+            if dns_future:
+                future_map[dns_future] = "dns"
+            if mx_future:
+                future_map[mx_future] = "mx"
+            if whois_future:
+                future_map[whois_future] = "whois"
+            future_map[header_future] = "headers"
 
-        if self.config.quick_mode:
-            return {
-                "address": address_data,
-                "dns": dns_data,
-                "mx": mx_data,
-                "whois": {"whois_notice": "skipped in quick mode"},
-                "network_whois": {"network_whois_notice": "skipped in quick mode"},
-                "headers": {"header_notice": "skipped in quick mode", "url": target, "tor_routed": self.config.route_mode == "stealth"},
-            }
+            if not dns_future:
+                out["dns"] = self._empty_dns_payload(dns_target)
+                emit(out)
+            if not mx_future:
+                out["mx"] = {"domain": dns_target, "mx": []}
+                emit(out)
+            if not whois_future:
+                out["whois"] = {"whois_error": "unable to derive domain for whois from IP target"}
+                emit(out)
+
+            for future in as_completed(list(future_map.keys())):
+                key = future_map[future]
+                try:
+                    out[key] = future.result()
+                except Exception as exc:
+                    if key == "headers":
+                        out[key] = {"url": target, "header_error": str(exc), "tor_routed": self.config.route_mode == "stealth"}
+                    elif key == "whois":
+                        out[key] = {"whois_error": str(exc)}
+                    elif key == "mx":
+                        out[key] = {"domain": dns_target, "mx_error": str(exc), "mx": []}
+                    else:
+                        out[key] = self._empty_dns_payload(dns_target)
+                        out[key]["dns_error"] = str(exc)
+                emit(out)
+
+        dns_data = out.get("dns", self._empty_dns_payload(dns_target))
+        mx_data = out.get("mx", {"domain": dns_target, "mx": []})
+        whois_data = out.get("whois", {"whois_error": "unable to derive domain for whois from IP target"})
+        headers_data = out.get("headers", {"url": target, "tor_routed": self.config.route_mode == "stealth"})
 
         if is_ip:
             try:
@@ -620,18 +646,28 @@ class StealthQueryEngine:
                     dns_data[key] = self._merge_unique(dns_data.get(key, []), root_dns.get(key, []))
                 for err_key in (k for k in root_dns.keys() if k.endswith("_error")):
                     dns_data.setdefault(err_key, root_dns[err_key])
+            out["dns"] = dns_data
+            emit(out)
 
         if not address_data:
             address_data = self.address_lookup(lookup_target, dns_data)
+            out["address"] = address_data
+            emit(out)
 
-        return {
+        network_whois_data = self.network_whois_lookup(dns_data, ip_override=network_ip)
+        out["network_whois"] = network_whois_data
+        emit(out)
+
+        final = {
             "address": address_data,
             "dns": dns_data,
             "mx": mx_data,
             "whois": whois_data,
-            "network_whois": self.network_whois_lookup(dns_data, ip_override=network_ip),
+            "network_whois": network_whois_data,
             "headers": headers_data,
         }
+        emit(final)
+        return final
     @staticmethod
     def _normalize_lookup_target(target: str) -> str:
         value = target.strip()
