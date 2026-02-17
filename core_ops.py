@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import ipaddress
 import socket
 from dataclasses import dataclass
@@ -236,6 +235,74 @@ class StealthQueryEngine:
                 return str(value)
         return None
 
+    @staticmethod
+    def _format_network_whois_record(payload: dict[str, Any], source_url: str) -> str:
+        lines: list[str] = []
+        lines.append(f"Source: {source_url}")
+        lines.append("")
+
+        def add(label: str, key: str) -> None:
+            value = payload.get(key)
+            if value not in (None, ""):
+                lines.append(f"{label}: {value}")
+
+        add("Handle", "handle")
+        add("Net Name", "name")
+        add("Start Address", "startAddress")
+        add("End Address", "endAddress")
+        add("IP Version", "ipVersion")
+        add("Type", "type")
+        add("Country", "country")
+        add("Parent Handle", "parentHandle")
+
+        cidr_values: list[str] = []
+        for cidr_item in payload.get("cidr0_cidrs", []):
+            if not isinstance(cidr_item, dict):
+                continue
+            prefix = cidr_item.get("v4prefix") or cidr_item.get("v6prefix")
+            length = cidr_item.get("length")
+            if prefix and length is not None:
+                cidr_values.append(f"{prefix}/{length}")
+        if cidr_values:
+            lines.append(f"CIDR: {', '.join(cidr_values)}")
+
+        events = payload.get("events", [])
+        if isinstance(events, list) and events:
+            lines.append("")
+            lines.append("Events:")
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                action = event.get("eventAction", "event")
+                date = event.get("eventDate", "")
+                actor = event.get("eventActor", "")
+                suffix = f" ({actor})" if actor else ""
+                lines.append(f"- {action}: {date}{suffix}")
+
+        entities = payload.get("entities", [])
+        if isinstance(entities, list) and entities:
+            lines.append("")
+            lines.append("Entities:")
+            for entity in entities:
+                if not isinstance(entity, dict):
+                    continue
+                handle = str(entity.get("handle", "")).strip() or "-"
+                roles = ", ".join(str(r) for r in entity.get("roles", []) if r) or "-"
+                name = (
+                    StealthQueryEngine._extract_vcard_field(entity, "fn")
+                    or StealthQueryEngine._extract_vcard_field(entity, "org")
+                    or "-"
+                )
+                email = StealthQueryEngine._extract_vcard_field(entity, "email") or "-"
+                phone = StealthQueryEngine._extract_vcard_field(entity, "tel") or "-"
+                lines.append(f"- Handle: {handle}")
+                lines.append(f"  Name: {name}")
+                lines.append(f"  Roles: {roles}")
+                lines.append(f"  Email: {email}")
+                lines.append(f"  Phone: {phone}")
+
+        return "\n".join(lines).strip()
+
     def network_whois_lookup(self, dns_data: dict[str, Any]) -> dict[str, Any]:
         ip_value = self._first_ip(dns_data)
         if not ip_value:
@@ -274,7 +341,7 @@ class StealthQueryEngine:
             return result
 
         result["rdap_url"] = used_url
-        result["raw_rdap"] = json.dumps(payload, indent=2, ensure_ascii=True)
+        result["network_whois_record"] = self._format_network_whois_record(payload, used_url or "unknown")
         for src_key, dst_key in (
             ("name", "net_name"),
             ("handle", "net_handle"),

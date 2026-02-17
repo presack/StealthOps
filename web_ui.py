@@ -138,7 +138,7 @@ def build_app(
             if key in network_whois_data
         }
         domain_raw_whois = str(whois_data.get("raw_whois", "")).strip()
-        network_raw_rdap = str(network_whois_data.get("raw_rdap", "")).strip()
+        network_whois_record = str(network_whois_data.get("network_whois_record", "")).strip()
 
         mx_rows = ""
         for item in mx_data.get("mx", []):
@@ -210,7 +210,7 @@ def build_app(
   <h3 class='font-semibold mb-2'>Network WHOIS</h3>
   <table class='text-sm w-full'><tbody>{render_kv_rows(network_whois_summary)}</tbody></table>
 </section>
-{"<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Network WHOIS Record</h3><pre class='bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-xs whitespace-pre-wrap'>" + html.escape(network_raw_rdap) + "</pre></section>" if network_raw_rdap else ""}
+{"<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Network WHOIS Record</h3><pre class='bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-xs whitespace-pre-wrap'>" + html.escape(network_whois_record) + "</pre></section>" if network_whois_record else ""}
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2' title='{dns_ns_cmd}'>NS Records</h3>
   <ul class='list-disc pl-5 text-sm space-y-1'>{ns_rows}</ul>
