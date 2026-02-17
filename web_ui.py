@@ -116,6 +116,18 @@ def build_app(
                 )
         return f"<table class='text-sm w-full'><tbody>{''.join(rows)}</tbody></table>"
 
+    def render_pre_block(record_text: str, compact: bool = False) -> str:
+        if not record_text.strip():
+            return "<p class='text-slate-400 text-sm'>Awaiting data...</p>"
+        leading = " leading-tight" if compact else ""
+        return (
+            "<pre class='text-sm whitespace-pre-wrap break-words text-slate-100"
+            + leading
+            + "'>"
+            + html.escape(record_text)
+            + "</pre>"
+        )
+
     def render_results(results: dict, show_json: bool) -> str:
         address_data = results.get("address", {})
         dns_data = results.get("dns", {})
@@ -233,7 +245,7 @@ def build_app(
   <h3 class='font-semibold mb-2' title='{whois_cmd}'>Domain Whois summary</h3>
   <div class='min-h-[18rem]'>
     {("<p class='text-amber-300 text-xs mb-2 break-words'>" + html.escape(whois_error) + "</p>") if whois_error else ""}
-    {render_record_lines(whois_record) if whois_record else "<p class='text-slate-400 text-sm'>Awaiting data...</p>"}
+    {render_pre_block(whois_record, compact=True) if whois_record else "<p class='text-slate-400 text-sm'>Awaiting data...</p>"}
   </div>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
