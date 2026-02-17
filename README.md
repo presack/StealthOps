@@ -1,13 +1,14 @@
 # StealthOps
 
 StealthOps is a privacy-hardened reconnaissance utility inspired by CentralOps.
-It supports both CLI and web dashboard workflows and defaults to Tor-routed operations.
+It supports both CLI and web dashboard workflows and defaults to fast public-route queries unless stealth mode is selected.
 
 ## Features
 
 - Dual mode execution:
-  - CLI mode when `--query` is provided
-  - Web mode when no query argument is provided
+  - CLI mode when target is provided (`stealthops <target>`)
+  - Interactive console mode via `--console`
+  - Web mode via `--web`
 - Automated Tor lifecycle with `stem`:
   - Detect existing Tor SOCKS proxy (`127.0.0.1:9050` or `127.0.0.1:9150`)
   - Attempt background Tor launch if unavailable
@@ -68,13 +69,25 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Web mode (default)
+### Startup behavior
+
+With no arguments, StealthOps prints help and an interactive quick menu:
+
+- `1` Start Web Server
+- `2` Start Console
+- `3` or `Enter` Exit
+
+### Web mode
 
 ```powershell
-python main.py
+python main.py --web
 ```
 
-This starts FastAPI on `127.0.0.1:5000`.
+Custom bind:
+
+```powershell
+python main.py --web --host 127.0.0.1 --port 5000
+```
 
 Web controls:
 
@@ -87,8 +100,8 @@ Web controls:
 ### CLI mode
 
 ```powershell
-python main.py --query example.com
-python main.py --query 167.99.60.180
+python main.py example.com
+python main.py 167.99.60.180
 ```
 
 Install/update managed Tor runtime from CLI:
@@ -100,25 +113,25 @@ python main.py --install-tor
 Default CLI output is formatted for readability. Use raw JSON when needed:
 
 ```powershell
-python main.py --query example.com --json
+python main.py example.com --json
 ```
 
 Force strict privacy behavior:
 
 ```powershell
-python main.py --query example.com --block-non-tor
+python main.py example.com --block-non-tor
 ```
 
-Run without Tor (public route):
+Default mode is `public` for quick results. Use stealth mode when needed:
 
 ```powershell
-python main.py --query example.com --public-route
+python main.py example.com --mode stealth
 ```
 
 Run without Tor and emit raw JSON:
 
 ```powershell
-python main.py --query example.com --public-route --json
+python main.py example.com --mode public --json
 ```
 
 If Tor is unavailable and you run stealth CLI mode, StealthOps will prompt to install managed Tor when running interactively.
@@ -126,15 +139,15 @@ If Tor is unavailable and you run stealth CLI mode, StealthOps will prompt to in
 Tor update controls:
 
 ```powershell
-python main.py --query example.com --tor-update auto
-python main.py --query example.com --tor-update force
-python main.py --query example.com --tor-update off
+python main.py example.com --tor-update auto
+python main.py example.com --tor-update force
+python main.py example.com --tor-update off
 ```
 
 Prefer system Tor:
 
 ```powershell
-python main.py --query example.com --prefer-system-tor
+python main.py example.com --prefer-system-tor
 ```
 
 ### Interactive console mode
@@ -151,19 +164,23 @@ Disable console colors when needed:
 python main.py --console --no-color
 ```
 
-Start console in public route mode:
+Start console in stealth mode:
 
 ```powershell
-python main.py --console --public-route
+python main.py --console --mode stealth
 ```
 
 Console commands:
 
 - `query <target>`
+- `<target>` (shorthand query)
+- `!<target>` (forced shorthand query)
 - `mode <stealth|public>`
 - `tor install`
 - `tor status`
+- `web [host] [port]`
 - `banner`
+- `status`
 - `block <on|off>`
 - `json <on|off>`
 - `clear`
@@ -215,15 +232,16 @@ Run examples for end users (no venv required):
 
 ```powershell
 .\dist\StealthOps.exe
-.\dist\StealthOps.exe --query example.com
-.\dist\StealthOps.exe --query example.com --public-route
+.\dist\StealthOps.exe example.com
+.\dist\StealthOps.exe example.com --mode stealth
+.\dist\StealthOps.exe --web
 ```
 
 Packaging notes:
 
 - Bundle the Tor directory, not only `tor.exe`, so companion files remain available.
 - On first run, bundled files are copied to managed runtime and launched from there.
-- If `vendor\tor` is not present at build time, users can still run with `--public-route` or install Tor separately.
+- If `vendor\tor` is not present at build time, users can still run in default public mode or use `--install-tor`.
 
 Optional: populate `vendor\tor` from an existing Tor Browser install before building:
 
@@ -234,7 +252,7 @@ Copy-Item "C:\Program Files\Tor Browser\Browser\TorBrowser\Tor\*" .\vendor\tor -
 
 ## Privacy Notes
 
-- DNS/MX attempts are Tor-first via DoH when Tor is verified.
+- In stealth mode, DNS/MX attempts are Tor-first via DoH when Tor is verified.
 - If `Block Non-Tor Traffic` is enabled and Tor is unavailable, queries fail closed.
 - WHOIS behavior depends on upstream libraries and registry responses; errors are surfaced in output.
 

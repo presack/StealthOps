@@ -48,9 +48,15 @@ def human_label(key: str) -> str:
     return key.replace("_", " ").strip().title()
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser = argparse.ArgumentParser(description="StealthOps - privacy-hardened reconnaissance utility")
+    parser.add_argument("target", nargs="?", help="Domain/URL/IP target for CLI mode")
     parser.add_argument("--query", help="Domain/URL target for CLI mode")
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Run web server mode",
+    )
     parser.add_argument(
         "--console",
         action="store_true",
@@ -65,6 +71,11 @@ def parse_args() -> argparse.Namespace:
         "--public-route",
         action="store_true",
         help="Bypass Tor and run queries over standard network route",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["stealth", "public"],
+        help="Routing mode for CLI/console (overrides --public-route)",
     )
     parser.add_argument(
         "--block-non-tor",
@@ -98,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--host", default="127.0.0.1", help="Web server bind host")
     parser.add_argument("--port", type=int, default=5000, help="Web server bind port")
-    return parser.parse_args()
+    return parser, parser.parse_args()
 
 
 def create_tor_engine(args: argparse.Namespace, status_callback: Callable[[str], None] | None = None) -> TorEngine:
@@ -353,10 +364,11 @@ def _render_status_lines(
 
 
 def run_cli(args: argparse.Namespace) -> int:
-    if not args.query:
+    target = args.query or args.target
+    if not target:
         return 1
 
-    route_mode = "public" if args.public_route else "stealth"
+    route_mode = args.mode or "public"
     tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
     if args.install_tor:
         print("[privacy] starting managed Tor install/update")
@@ -382,11 +394,11 @@ def run_cli(args: argparse.Namespace) -> int:
     if tor_engine.last_error:
         print(f"[privacy] notice={tor_engine.last_error}")
 
-    return _execute_query(query_engine, args.query, args.json, use_color=False)
+    return _execute_query(query_engine, target, args.json, use_color=False)
 
 
 def run_console(args: argparse.Namespace) -> int:
-    route_mode = "public" if args.public_route else "stealth"
+    route_mode = args.mode or "public"
     emit_json = bool(args.json)
     block_non_tor = bool(args.block_non_tor)
 
@@ -437,9 +449,12 @@ def run_console(args: argparse.Namespace) -> int:
         if cmd == "help":
             print("Commands:")
             print("  query <target>         run lookup on target")
+            print("  <target>               shorthand query (any non-command input)")
+            print("  !<target>              forced shorthand query")
             print("  mode <stealth|public>  set routing mode")
             print("  tor install            install/update managed Tor runtime")
             print("  tor status             show Tor status")
+            print("  web [host] [port]      start web server and exit console")
             print("  banner                 print full intro banner")
             print("  status                 print console status banner")
             print("  block <on|off>         set block non-tor mode")
@@ -452,6 +467,26 @@ def run_console(args: argparse.Namespace) -> int:
             os.system("cls" if os.name == "nt" else "clear")
             print("")
             continue
+        if cmd == "web":
+            host = args.host
+            port = args.port
+            if len(parts) >= 2:
+                host = parts[1]
+            if len(parts) >= 3:
+                try:
+                    port = int(parts[2])
+                except ValueError:
+                    print("usage: web [host] [port]")
+                    print("")
+                    continue
+            if len(parts) > 3:
+                print("usage: web [host] [port]")
+                print("")
+                continue
+            print(f"Starting web server on {host}:{port}")
+            print("")
+            run_web(args, host_override=host, port_override=port)
+            return 0
         if cmd == "banner":
             print(_render_console_banner(query_engine, tor_engine, tor_ok, emit_json, use_color))
             print("")
@@ -527,36 +562,65 @@ def run_console(args: argparse.Namespace) -> int:
             print("")
             continue
 
+        shorthand_target = raw[1:].strip() if raw.startswith("!") else raw
+        if shorthand_target:
+            _execute_query(query_engine, shorthand_target, emit_json, use_color=use_color)
+            print("")
+            continue
         print("unknown command. type 'help'")
         print("")
 
 
-def run_web(args: argparse.Namespace) -> None:
+def run_web(args: argparse.Namespace, host_override: str | None = None, port_override: int | None = None) -> None:
     app = build_app(
         tor_update_mode=args.tor_update,
         tor_update_manifest=args.tor_update_manifest,
         prefer_system_tor=args.prefer_system_tor,
     )
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(app, host=host_override or args.host, port=port_override or args.port)
 
 
 def main() -> int:
-    args = parse_args()
+    parser, args = parse_args()
 
-    if args.install_tor and not args.query and not args.console:
+    if args.install_tor and not args.query and not args.target and not args.console and not args.web:
         tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
         print("[privacy] starting managed Tor install/update")
         message = tor_engine.manage_tor_runtime(force_update=True)
         print(f"[privacy] tor_runtime={message}")
         return 0
 
+    no_explicit_action = not any([args.query, args.target, args.console, args.web, args.install_tor])
+    if no_explicit_action:
+        parser.print_help()
+        if _interactive_stdio():
+            print("")
+            print("Quick Start")
+            print("1. Start Web Server")
+            print("2. Start Console")
+            print("3. Exit")
+            try:
+                choice = input("Select option [Enter to exit]: ").strip()
+            except EOFError:
+                return 0
+            if choice == "1":
+                run_web(args)
+                return 0
+            if choice == "2":
+                return run_console(args)
+            return 0
+        return 0
+
     if args.console:
         return run_console(args)
 
-    if args.query:
+    if args.query or args.target:
         return run_cli(args)
 
-    run_web(args)
+    if args.web:
+        run_web(args)
+        return 0
+
     return 0
 
 
