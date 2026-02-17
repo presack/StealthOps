@@ -62,9 +62,18 @@ class StealthQueryEngine:
         resolver.port = 53
         return resolver
 
-    def dns_lookup(self, domain: str) -> dict[str, Any]:
-        out: dict[str, Any] = {
-            "domain": domain,
+    @staticmethod
+    def _is_ip(value: str) -> bool:
+        try:
+            ipaddress.ip_address(value)
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _empty_dns_payload(name: str) -> dict[str, Any]:
+        return {
+            "domain": name,
             "a": [],
             "aaaa": [],
             "ns": [],
@@ -72,7 +81,29 @@ class StealthQueryEngine:
             "cname": [],
             "caa": [],
             "soa": [],
+            "ptr": [],
         }
+
+    @staticmethod
+    def _merge_unique(existing: list[str], incoming: list[str]) -> list[str]:
+        out = list(existing)
+        for item in incoming:
+            if item not in out:
+                out.append(item)
+        return out
+
+    @staticmethod
+    def _guess_domain_from_host(host: str) -> str:
+        labels = [label for label in host.strip(".").split(".") if label]
+        if len(labels) < 2:
+            return host
+        second_level_tokens = {"co", "com", "net", "org", "gov", "edu", "ac"}
+        if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in second_level_tokens:
+            return ".".join(labels[-3:])
+        return ".".join(labels[-2:])
+
+    def dns_lookup(self, domain: str) -> dict[str, Any]:
+        out = self._empty_dns_payload(domain)
 
         for rtype, key in (
             ("A", "a"),
@@ -220,13 +251,23 @@ class StealthQueryEngine:
             "aliases": [],
             "addresses": [],
         }
-        try:
-            canonical, aliases, addresses = socket.gethostbyname_ex(domain)
-            result["canonical_name"] = canonical.rstrip(".")
-            result["aliases"] = [str(v).rstrip(".") for v in aliases if v]
-            result["addresses"] = [str(v) for v in addresses if v]
-        except Exception as exc:
-            result["address_lookup_error"] = str(exc)
+        if self._is_ip(domain):
+            try:
+                canonical, aliases, addresses = socket.gethostbyaddr(domain)
+                result["canonical_name"] = canonical.rstrip(".")
+                result["aliases"] = [str(v).rstrip(".") for v in aliases if v]
+                result["addresses"] = [str(v) for v in addresses if v]
+            except Exception as exc:
+                result["address_lookup_error"] = str(exc)
+                result["addresses"] = [domain]
+        else:
+            try:
+                canonical, aliases, addresses = socket.gethostbyname_ex(domain)
+                result["canonical_name"] = canonical.rstrip(".")
+                result["aliases"] = [str(v).rstrip(".") for v in aliases if v]
+                result["addresses"] = [str(v) for v in addresses if v]
+            except Exception as exc:
+                result["address_lookup_error"] = str(exc)
 
         # Merge in DNS answers to avoid empty or incomplete address sets.
         merged = []
@@ -343,8 +384,8 @@ class StealthQueryEngine:
 
         return "\n".join(lines).strip()
 
-    def network_whois_lookup(self, dns_data: dict[str, Any]) -> dict[str, Any]:
-        ip_value = self._first_ip(dns_data)
+    def network_whois_lookup(self, dns_data: dict[str, Any], ip_override: str | None = None) -> dict[str, Any]:
+        ip_value = ip_override or self._first_ip(dns_data)
         if not ip_value:
             return {"network_whois_error": "no A/AAAA record available for network whois"}
 
@@ -465,14 +506,62 @@ class StealthQueryEngine:
 
     def run_all(self, target: str) -> dict[str, Any]:
         lookup_target = self._normalize_lookup_target(target)
-        dns_data = self.dns_lookup(lookup_target)
-        address_data = self.address_lookup(lookup_target, dns_data)
+        is_ip = self._is_ip(lookup_target)
+
+        dns_target = lookup_target
+        whois_target = lookup_target
+        network_ip = lookup_target if is_ip else None
+
+        if is_ip:
+            # For IP targets, use reverse DNS host for DNS/WHOIS context when available.
+            placeholder_dns = self._empty_dns_payload(lookup_target)
+            address_data = self.address_lookup(lookup_target, placeholder_dns)
+            canonical = str(address_data.get("canonical_name", "")).strip().rstrip(".")
+            if canonical and canonical != lookup_target:
+                dns_target = canonical
+                whois_target = self._guess_domain_from_host(canonical)
+                address_data["derived_domain"] = whois_target
+            else:
+                dns_target = lookup_target
+                whois_target = ""
+        else:
+            dns_target = lookup_target
+            whois_target = lookup_target
+            address_data = {}
+
+        dns_data = self.dns_lookup(dns_target) if not self._is_ip(dns_target) else self._empty_dns_payload(dns_target)
+
+        if is_ip:
+            try:
+                reverse_name = ".".join(reversed(lookup_target.split("."))) + ".in-addr.arpa"
+                ptr_vals = self._doh_query(reverse_name, "PTR")
+                dns_data["ptr"] = ptr_vals
+            except Exception as ptr_exc:
+                dns_data["ptr_error"] = str(ptr_exc)
+
+            # Pull authoritative context from derived registrable domain where possible.
+            if whois_target:
+                root_dns = self.dns_lookup(whois_target)
+                for key in ("ns", "soa", "txt", "caa"):
+                    dns_data[key] = self._merge_unique(dns_data.get(key, []), root_dns.get(key, []))
+                for err_key in (k for k in root_dns.keys() if k.endswith("_error")):
+                    dns_data.setdefault(err_key, root_dns[err_key])
+
+        if not address_data:
+            address_data = self.address_lookup(lookup_target, dns_data)
+
+        if whois_target:
+            whois_data = self.whois_lookup(whois_target)
+        else:
+            whois_data = {"whois_error": "unable to derive domain for whois from IP target"}
+
+        mx_data = self.mx_lookup(whois_target or dns_target) if not self._is_ip(whois_target or dns_target) else {"domain": dns_target, "mx": []}
         return {
             "address": address_data,
             "dns": dns_data,
-            "mx": self.mx_lookup(lookup_target),
-            "whois": self.whois_lookup(lookup_target),
-            "network_whois": self.network_whois_lookup(dns_data),
+            "mx": mx_data,
+            "whois": whois_data,
+            "network_whois": self.network_whois_lookup(dns_data, ip_override=network_ip),
             "headers": self.header_inspect(target),
         }
     @staticmethod

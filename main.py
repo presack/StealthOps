@@ -24,6 +24,7 @@ def human_label(key: str) -> str:
         "updated_date": "Updated Date",
         "whois_server": "WHOIS Server",
         "canonical_name": "Canonical Name",
+        "derived_domain": "Derived Domain",
         "aliases": "Aliases",
         "addresses": "Addresses",
         "address_lookup_error": "Address Lookup Error",
@@ -119,7 +120,7 @@ def format_cli_report(result: dict) -> str:
 
     lines: list[str] = []
     lines.append("=== ADDRESS LOOKUP ===  [source: resolver + DNS records]")
-    for field in ["query", "canonical_name", "aliases", "addresses", "address_lookup_error"]:
+    for field in ["query", "canonical_name", "derived_domain", "aliases", "addresses", "address_lookup_error"]:
         if field in address_data:
             value = address_data[field]
             if isinstance(value, list):
@@ -211,7 +212,7 @@ def format_cli_report(result: dict) -> str:
             lines.append(f"- {key}: {value}")
 
     extra_dns = []
-    for field in ("cname", "caa", "soa"):
+    for field in ("cname", "caa", "soa", "ptr"):
         vals = dns_data.get(field, [])
         if vals:
             extra_dns.append(f"{field.upper()}: {', '.join(vals)}")

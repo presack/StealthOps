@@ -18,6 +18,7 @@ It supports both CLI and web dashboard workflows and defaults to Tor-routed oper
   - Optional update checks with modes: `auto`, `force`, `off`
 - Query engine modules:
   - Address lookup (canonical name, aliases, addresses)
+  - Accepts domain, URL, or IP targets
   - DNS lookup (A, AAAA, NS, TXT, CNAME, CAA, SOA)
   - MX lookup
   - WHOIS lookup
@@ -87,6 +88,7 @@ Web controls:
 
 ```powershell
 python main.py --query example.com
+python main.py --query 167.99.60.180
 ```
 
 Install/update managed Tor runtime from CLI:

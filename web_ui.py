@@ -24,6 +24,7 @@ def human_label(key: str) -> str:
         "whois_server": "WHOIS Server",
         "name_servers": "Name Servers",
         "canonical_name": "Canonical Name",
+        "derived_domain": "Derived Domain",
         "aliases": "Aliases",
         "addresses": "Addresses",
         "address_lookup_error": "Address Lookup Error",
@@ -99,6 +100,7 @@ def build_app(
             for key in [
                 "query",
                 "canonical_name",
+                "derived_domain",
                 "aliases",
                 "addresses",
                 "address_lookup_error",
@@ -131,12 +133,18 @@ def build_app(
         domain_whois_record = str(whois_data.get("domain_whois_record", "")).strip()
         network_whois_record = str(network_whois_data.get("network_whois_record", "")).strip()
         network_notice = str(network_whois_data.get("network_whois_warning") or network_whois_data.get("network_whois_error") or "").strip()
+        dns_notices = []
+        for key in sorted(k for k in dns_data.keys() if k.endswith("_error")):
+            dns_notices.append(f"DNS query issue ({key}): {dns_data.get(key)}")
+        if mx_data.get("mx_error"):
+            dns_notices.append(f"DNS query issue (mx_error): {mx_data.get('mx_error')}")
 
         dns_rows = []
         domain = str(dns_data.get("domain", "-"))
         for rtype, key in (
             ("A", "a"),
             ("AAAA", "aaaa"),
+            ("PTR", "ptr"),
             ("NS", "ns"),
             ("TXT", "txt"),
             ("CNAME", "cname"),
@@ -209,6 +217,7 @@ def build_app(
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2'>DNS records</h3>
+  {"".join("<p class='text-amber-300 text-xs mb-2 break-words'>" + html.escape(note) + "</p>" for note in dns_notices)}
   <table class='text-sm w-full'>
     <thead><tr><th class='text-left py-1 pr-3 text-slate-400'>Name</th><th class='text-left py-1 pr-3 text-slate-400'>Class</th><th class='text-left py-1 pr-3 text-slate-400'>Type</th><th class='text-left py-1 text-slate-400'>Data</th><th class='text-left py-1 pl-3 text-slate-400'>TTL</th></tr></thead>
     <tbody>{dns_records_html}</tbody>
