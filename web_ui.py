@@ -86,10 +86,35 @@ def build_app(
             else:
                 value_str = str(value) if value not in (None, "") else "-"
             rows.append(
-                f"<tr><td class='py-1 pr-3 align-top w-56 text-slate-400'>{html.escape(human_label(str(key)))}</td>"
+                f"<tr><td class='py-1 pr-3 align-top w-56 text-slate-400'>{html.escape(human_label(str(key)))}:</td>"
                 f"<td class='py-1 pl-2 align-top text-slate-100 break-all'>{html.escape(value_str)}</td></tr>"
             )
         return "".join(rows)
+
+    def render_record_lines(record_text: str) -> str:
+        if not record_text.strip():
+            return "<p class='text-slate-400 text-sm'>Awaiting data...</p>"
+        rows = []
+        for raw_line in record_text.splitlines():
+            line = raw_line.rstrip()
+            if not line.strip():
+                rows.append("<tr><td class='py-1' colspan='2'>&nbsp;</td></tr>")
+                continue
+            if ":" in line:
+                key, value = line.split(":", 1)
+                rows.append(
+                    "<tr>"
+                    f"<td class='py-1 pr-3 align-top w-56 text-slate-400'>{html.escape(key.strip())}:</td>"
+                    f"<td class='py-1 pl-2 align-top text-slate-100 break-all'>{html.escape(value.strip())}</td>"
+                    "</tr>"
+                )
+            else:
+                rows.append(
+                    "<tr>"
+                    f"<td class='py-1 text-slate-100 break-words' colspan='2'>{html.escape(line)}</td>"
+                    "</tr>"
+                )
+        return f"<table class='text-sm w-full'><tbody>{''.join(rows)}</tbody></table>"
 
     def render_results(results: dict, show_json: bool) -> str:
         address_data = results.get("address", {})
@@ -134,7 +159,6 @@ def build_app(
             ]
             if key in whois_data
         }
-        domain_whois_record = str(whois_data.get("domain_whois_record", "")).strip()
         network_whois_record = str(network_whois_data.get("network_whois_record", "")).strip()
         network_notice = str(
             network_whois_data.get("network_whois_warning")
@@ -211,17 +235,22 @@ def build_app(
         return f"""
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-6'>
   <h3 class='font-semibold mb-2'>Address lookup</h3>
-  <table class='text-sm w-full'><tbody>{render_kv_rows(address_summary)}</tbody></table>
+  <div class='min-h-[9rem]'>
+    <table class='text-sm w-full'><tbody>{render_kv_rows(address_summary) if address_summary else "<tr><td class='text-slate-400 text-sm'>Awaiting data...</td></tr>"}</tbody></table>
+  </div>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2' title='{whois_cmd}'>Domain Whois summary</h3>
-  <table class='text-sm w-full'><tbody>{render_kv_rows(whois_summary)}</tbody></table>
+  <div class='min-h-[12rem]'>
+    <table class='text-sm w-full'><tbody>{render_kv_rows(whois_summary) if whois_summary else "<tr><td class='text-slate-400 text-sm'>Awaiting data...</td></tr>"}</tbody></table>
+  </div>
 </section>
-{"<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Domain Whois record</h3><div class='text-sm leading-6 whitespace-pre-wrap break-words text-slate-100'>" + html.escape(domain_whois_record) + "</div></section>" if domain_whois_record else ""}
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2'>Network Whois record</h3>
   {"<p class='text-amber-300 text-xs mb-2'>" + html.escape(network_notice) + "</p>" if network_notice else ""}
-  <div class='text-sm leading-6 whitespace-pre-wrap break-words text-slate-100'>{html.escape(network_whois_record or "No network whois record available.")}</div>
+  <div class='min-h-[12rem]'>
+    {render_record_lines(network_whois_record)}
+  </div>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2'>DNS records</h3>
@@ -375,7 +404,10 @@ def build_app(
 
       form.addEventListener('submit', async function(ev) {{
         ev.preventDefault();
-        panel.innerHTML = "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><p class='text-slate-300'>Running query...</p></section>";
+        panel.innerHTML = ""
+          + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-6'><h3 class='font-semibold mb-2'>Address lookup</h3><div class='min-h-[9rem] text-slate-400 text-sm'>Collecting...</div></section>"
+          + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Domain Whois summary</h3><div class='min-h-[12rem] text-slate-400 text-sm'>Collecting...</div></section>"
+          + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Network Whois record</h3><div class='min-h-[12rem] text-slate-400 text-sm'>Collecting...</div></section>";
         const body = new FormData(form);
         const res = await fetch('/query/start', {{ method: 'POST', body }});
         if (!res.ok) {{
