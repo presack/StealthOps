@@ -91,10 +91,10 @@ python main.py --web --host 127.0.0.1 --port 5000
 
 Web controls:
 
-- `Routing Mode` toggle at top:
+- Header controls:
   - `Public Mode` (default, fast route)
   - `Stealth Mode` (Tor-routed when available)
-- `Block Non-Tor Traffic`: fail closed when Tor mode is selected and Tor is unavailable.
+- Stealth mode is fail-closed by default in web mode (non-Tor fallback disabled).
 - `Install / Update Managed Tor`: appears when Stealth Mode is selected and Tor is not verified.
 - Install/update flow shows the official source URL first and requires confirmation before downloading.
 

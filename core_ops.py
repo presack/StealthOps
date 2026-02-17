@@ -62,6 +62,13 @@ class StealthQueryEngine:
         resolver.port = 53
         return resolver
 
+    def _resolver_query(self, name: str, rtype: str, lifetime: float = 8) -> list[str]:
+        try:
+            answers = self._resolver_fallback().resolve(name, rtype, lifetime=lifetime)
+            return [str(record).rstrip(".") for record in answers]
+        except dns.resolver.NoAnswer:
+            return []
+
     @staticmethod
     def _is_ip(value: str) -> bool:
         try:
@@ -105,6 +112,23 @@ class StealthQueryEngine:
     def dns_lookup(self, domain: str) -> dict[str, Any]:
         out = self._empty_dns_payload(domain)
 
+        # In public mode, avoid Tor-first DoH attempts and query resolver directly.
+        if self.config.route_mode == "public":
+            for rtype, key in (
+                ("A", "a"),
+                ("AAAA", "aaaa"),
+                ("NS", "ns"),
+                ("TXT", "txt"),
+                ("CNAME", "cname"),
+                ("CAA", "caa"),
+                ("SOA", "soa"),
+            ):
+                try:
+                    out[key] = self._resolver_query(domain, rtype, lifetime=8)
+                except Exception as dns_exc:
+                    out[f"{key}_error"] = str(dns_exc)
+            return out
+
         for rtype, key in (
             ("A", "a"),
             ("AAAA", "aaaa"),
@@ -123,8 +147,7 @@ class StealthQueryEngine:
 
                 # Controlled fallback when user allows non-Tor traffic.
                 try:
-                    answers = self._resolver_fallback().resolve(domain, rtype, lifetime=8)
-                    out[key] = [str(record).rstrip(".") for record in answers]
+                    out[key] = self._resolver_query(domain, rtype, lifetime=8)
                     out[f"{key}_warning"] = "non-tor fallback used"
                 except Exception as dns_exc:
                     out[f"{key}_error"] = f"doh={doh_exc}; resolver={dns_exc}"
@@ -133,6 +156,19 @@ class StealthQueryEngine:
 
     def mx_lookup(self, domain: str) -> dict[str, Any]:
         result: dict[str, Any] = {"domain": domain, "mx": []}
+
+        if self.config.route_mode == "public":
+            try:
+                answers = self._resolver_fallback().resolve(domain, "MX", lifetime=8)
+                result["mx"] = [
+                    {"priority": r.preference, "host": str(r.exchange).rstrip(".")}
+                    for r in sorted(answers, key=lambda x: x.preference)
+                ]
+            except dns.resolver.NoAnswer:
+                result["mx"] = []
+            except Exception as dns_exc:
+                result["mx_error"] = str(dns_exc)
+            return result
 
         try:
             records = self._doh_query(domain, "MX")
@@ -159,6 +195,9 @@ class StealthQueryEngine:
                 {"priority": r.preference, "host": str(r.exchange).rstrip(".")}
                 for r in sorted(answers, key=lambda x: x.preference)
             ]
+            result["mx_warning"] = "non-tor fallback used"
+        except dns.resolver.NoAnswer:
+            result["mx"] = []
             result["mx_warning"] = "non-tor fallback used"
         except Exception as dns_exc:
             result["mx_error"] = str(dns_exc)
