@@ -105,7 +105,7 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser.add_argument(
         "--no-color",
         action="store_true",
-        help="Disable ANSI colors in console mode",
+        help="Disable ANSI colors in console/CLI output",
     )
     parser.add_argument("--host", default="127.0.0.1", help="Web server bind host")
     parser.add_argument("--port", type=int, default=5000, help="Web server bind port")
@@ -385,6 +385,7 @@ def run_cli(args: argparse.Namespace) -> int:
             route_mode=route_mode,
         ),
     )
+    use_color = _color_enabled(args) and not args.json
 
     if route_mode == "stealth":
         print(f"[privacy] tor_verified={tor_ok}")
@@ -393,7 +394,7 @@ def run_cli(args: argparse.Namespace) -> int:
         if tor_engine.last_error:
             print(f"[privacy] notice={tor_engine.last_error}")
 
-    return _execute_query(query_engine, target, args.json, use_color=False)
+    return _execute_query(query_engine, target, args.json, use_color=use_color)
 
 
 def run_console(args: argparse.Namespace) -> int:

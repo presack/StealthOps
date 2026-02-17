@@ -165,6 +165,12 @@ Disable console colors when needed:
 python main.py --console --no-color
 ```
 
+Disable colors in CLI output as well:
+
+```powershell
+python main.py example.com --no-color
+```
+
 Start console in stealth mode:
 
 ```powershell
