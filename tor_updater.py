@@ -172,6 +172,7 @@ class TorUpdater:
 
     def _fetch_manifest(self) -> dict[str, Any]:
         manifest_source = self.manifest_url
+        source_kind = "explicit" if manifest_source else "auto"
         if not manifest_source:
             candidates = [Path.cwd() / "tor-manifest.json"]
             if getattr(sys, "frozen", False):
@@ -180,6 +181,7 @@ class TorUpdater:
             for candidate in candidates:
                 if candidate.exists():
                     manifest_source = str(candidate)
+                    source_kind = "local_file"
                     break
 
         if not manifest_source:
@@ -197,9 +199,16 @@ class TorUpdater:
         if missing:
             raise RuntimeError(f"manifest missing keys: {', '.join(missing)}")
         if "example.com" in str(manifest.get("windows_url", "")):
+            if source_kind == "local_file":
+                return self._fetch_official_tor_project_manifest()
             raise RuntimeError("manifest appears to be a template; replace windows_url/sha256 with real values")
 
         return manifest
+
+    def preview_update_source(self) -> dict[str, Any]:
+        """Return the current resolved update candidate without downloading."""
+        manifest = self._fetch_manifest()
+        return {"version": str(manifest["version"]), "windows_url": str(manifest["windows_url"])}
 
     @staticmethod
     def _sha256_file(path: Path) -> str:

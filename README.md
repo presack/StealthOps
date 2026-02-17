@@ -76,7 +76,7 @@ Web controls:
 - `Run Fast Query (Public)`: bypasses Tor for speed.
 - `Block Non-Tor Traffic`: fail closed when Tor mode is selected and Tor is unavailable.
 - `Install / Update Managed Tor`: appears when Tor is not verified and triggers managed runtime bootstrap/update.
-- `Update Manifest URL`: optional field in Tor Setup panel for runtime updates when no bundled runtime is present.
+- Install/update flow shows the official source URL first and requires confirmation before downloading.
 
 ### CLI mode
 
@@ -104,12 +104,6 @@ python main.py --query example.com --tor-update force
 python main.py --query example.com --tor-update off
 ```
 
-Provide update manifest URL:
-
-```powershell
-python main.py --query example.com --tor-update-manifest https://example.com/tor-manifest.json
-```
-
 Prefer system Tor:
 
 ```powershell
@@ -130,7 +124,8 @@ Expected JSON keys:
 
 - `sha256` is required and enforced before activation.
 - In `auto` mode, update checks are TTL-based (default 24 hours).
-- If no manifest is provided, updater attempts to discover latest Windows Tor Expert Bundle directly from `torproject.org` and resolves SHA256 from `sha256sums-signed-build.txt`.
+- If no manifest is provided, updater discovers the latest Windows Tor Expert Bundle directly from `torproject.org` and resolves SHA256 from `sha256sums-signed-build.txt`.
+- `--tor-update-manifest` remains optional for advanced/self-hosted update workflows.
 
 ## PyInstaller (single EXE)
 

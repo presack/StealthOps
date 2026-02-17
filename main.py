@@ -60,20 +60,22 @@ def format_cli_report(result: dict) -> str:
     headers_data = result.get("headers", {})
 
     lines: list[str] = []
-    lines.append("=== DNS ===")
-    lines.append(f"Domain: {dns_data.get('domain', '-')}")
-    lines.append(f"A: {', '.join(dns_data.get('a', [])) or '-'}")
-    lines.append(f"AAAA: {', '.join(dns_data.get('aaaa', [])) or '-'}")
-    lines.append(f"NS: {', '.join(dns_data.get('ns', [])) or '-'}")
-    lines.append(f"TXT: {', '.join(dns_data.get('txt', [])) or '-'}")
-    lines.append(f"CNAME: {', '.join(dns_data.get('cname', [])) or '-'}")
-    lines.append(f"CAA: {', '.join(dns_data.get('caa', [])) or '-'}")
-    lines.append(f"SOA: {', '.join(dns_data.get('soa', [])) or '-'}")
-    for key in sorted(k for k in dns_data.keys() if k.endswith(('_error', '_warning'))):
-        lines.append(f"{key}: {dns_data.get(key)}")
+    lines.append("=== WHOIS ===  [source: whois <domain>]")
+    for field in ["domain_name", "registrar", "creation_date", "expiration_date", "status", "whois_error"]:
+        if field in whois_data:
+            value = whois_data[field]
+            if isinstance(value, list):
+                value = ", ".join(str(v) for v in value) if value else "-"
+            lines.append(f"{field}: {value}")
 
     lines.append("")
-    lines.append("=== MX ===")
+    lines.append("=== DNS SUMMARY ===  [source: dns query A/AAAA]")
+    lines.append(f"domain: {dns_data.get('domain', '-')}")
+    lines.append(f"A: {', '.join(dns_data.get('a', [])) or '-'}")
+    lines.append(f"AAAA: {', '.join(dns_data.get('aaaa', [])) or '-'}")
+
+    lines.append("")
+    lines.append("=== MX RECORDS ===  [source: dns query MX]")
     lines.append(f"Domain: {mx_data.get('domain', '-')}")
     mx_records = mx_data.get("mx", [])
     if mx_records:
@@ -87,16 +89,25 @@ def format_cli_report(result: dict) -> str:
         lines.append(f"mx_error: {mx_data.get('mx_error')}")
 
     lines.append("")
-    lines.append("=== WHOIS ===")
-    for field in ["domain_name", "registrar", "creation_date", "expiration_date", "name_servers", "status", "whois_error"]:
-        if field in whois_data:
-            value = whois_data[field]
-            if isinstance(value, list):
-                value = ", ".join(str(v) for v in value) if value else "-"
-            lines.append(f"{field}: {value}")
+    lines.append("=== NS RECORDS ===  [source: dns query NS]")
+    ns_records = dns_data.get("ns", [])
+    if ns_records:
+        for value in ns_records:
+            lines.append(f"- {value}")
+    else:
+        lines.append("- none")
 
     lines.append("")
-    lines.append("=== HTTP Headers ===")
+    lines.append("=== TXT RECORDS ===  [source: dns query TXT]")
+    txt_records = dns_data.get("txt", [])
+    if txt_records:
+        for value in txt_records:
+            lines.append(f"- {value}")
+    else:
+        lines.append("- none")
+
+    lines.append("")
+    lines.append("=== HTTP HEADERS ===  [source: GET + response headers]")
     lines.append(f"url: {headers_data.get('url', '-')}")
     lines.append(f"status_code: {headers_data.get('status_code', '-')}")
     lines.append(f"final_url: {headers_data.get('final_url', '-')}")
@@ -107,6 +118,18 @@ def format_cli_report(result: dict) -> str:
         lines.append("headers:")
         for key, value in headers_data.get("headers", {}).items():
             lines.append(f"- {key}: {value}")
+
+    extra_dns = []
+    for field in ("cname", "caa", "soa"):
+        vals = dns_data.get(field, [])
+        if vals:
+            extra_dns.append(f"{field.upper()}: {', '.join(vals)}")
+    dns_notes = [f"{k}: {dns_data.get(k)}" for k in sorted(k for k in dns_data.keys() if k.endswith(("_error", "_warning")))]
+    if extra_dns or dns_notes:
+        lines.append("")
+        lines.append("=== ADDITIONAL DNS ===")
+        lines.extend(extra_dns)
+        lines.extend(dns_notes)
 
     return "\n".join(lines)
 

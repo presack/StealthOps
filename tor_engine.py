@@ -245,7 +245,7 @@ class TorEngine:
                     messages.append("managed tor bootstrapped from bundled runtime")
             else:
                 messages.append("no bundled tor runtime found")
-                messages.append("provide bundled tor files, set TOR_PATH, or configure --tor-update-manifest")
+                messages.append("provide bundled tor files, set TOR_PATH, or allow official source download")
                 messages.append("updater can also attempt official torproject.org source when no manifest is provided")
 
         mode = "force" if force_update else self.tor_update_mode
@@ -258,6 +258,13 @@ class TorEngine:
 
         self.last_update_message = "; ".join(messages)
         return self.last_update_message
+
+    def preview_update_source(self) -> str:
+        try:
+            candidate = self.updater.preview_update_source()
+            return f"Ready to download Tor {candidate['version']} from: {candidate['windows_url']}"
+        except Exception as exc:
+            return f"Unable to resolve update source: {exc}"
 
     def stop_tor(self) -> None:
         if self.process is None:

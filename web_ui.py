@@ -56,30 +56,6 @@ def build_app(
         whois_data = results.get("whois", {})
         header_data = results.get("headers", {})
 
-        mx_rows = ""
-        for item in mx_data.get("mx", []):
-            prio = item.get("priority")
-            host = item.get("host", "")
-            mx_rows += (
-                "<tr>"
-                f"<td class='py-1 pr-3'>{html.escape(str(prio) if prio is not None else '-')}</td>"
-                f"<td class='py-1'>{html.escape(str(host))}</td>"
-                "</tr>"
-            )
-        if not mx_rows:
-            mx_rows = "<tr><td class='py-1 pr-3' colspan='2'>No MX records</td></tr>"
-
-        headers_rows = ""
-        for key, value in header_data.get("headers", {}).items():
-            headers_rows += (
-                "<tr>"
-                f"<td class='py-1 pr-3 text-slate-400'>{html.escape(str(key))}</td>"
-                f"<td class='py-1 text-slate-100'>{html.escape(str(value))}</td>"
-                "</tr>"
-            )
-        if not headers_rows:
-            headers_rows = "<tr><td class='py-1 pr-3' colspan='2'>No headers</td></tr>"
-
         whois_summary = {
             key: whois_data.get(key)
             for key in [
@@ -87,12 +63,36 @@ def build_app(
                 "registrar",
                 "creation_date",
                 "expiration_date",
-                "name_servers",
                 "status",
                 "whois_error",
             ]
             if key in whois_data
         }
+
+        mx_rows = ""
+        for item in mx_data.get("mx", []):
+            mx_rows += (
+                "<tr>"
+                f"<td class='py-1 pr-3'>{html.escape(str(item.get('priority', '-')))}</td>"
+                f"<td class='py-1'>{html.escape(str(item.get('host', '-')))}</td>"
+                "</tr>"
+            )
+        if not mx_rows:
+            mx_rows = "<tr><td class='py-1 pr-3' colspan='2'>No MX records</td></tr>"
+
+        ns_rows = "".join(f"<li>{html.escape(str(v))}</li>" for v in dns_data.get("ns", [])) or "<li>None</li>"
+        txt_rows = "".join(f"<li class='break-all'>{html.escape(str(v))}</li>" for v in dns_data.get("txt", [])) or "<li>None</li>"
+
+        headers_rows = ""
+        for key, value in header_data.get("headers", {}).items():
+            headers_rows += (
+                "<tr>"
+                f"<td class='py-1 pr-3 text-slate-400'>{html.escape(str(key))}</td>"
+                f"<td class='py-1 text-slate-100 break-all'>{html.escape(str(value))}</td>"
+                "</tr>"
+            )
+        if not headers_rows:
+            headers_rows = "<tr><td class='py-1 pr-3' colspan='2'>No headers</td></tr>"
 
         json_panel = ""
         if show_json:
@@ -103,32 +103,55 @@ def build_app(
                 "</section>"
             )
 
+        domain = html.escape(str(dns_data.get("domain", "-")))
+        a_records = ", ".join(str(v) for v in dns_data.get("a", [])) or "-"
+
+        whois_cmd = html.escape(f"whois {dns_data.get('domain', '<domain>')}")
+        dns_a_cmd = html.escape(f"dns lookup A {dns_data.get('domain', '<domain>')}")
+        dns_mx_cmd = html.escape(f"dns lookup MX {dns_data.get('domain', '<domain>')}")
+        dns_ns_cmd = html.escape(f"dns lookup NS {dns_data.get('domain', '<domain>')}")
+        dns_txt_cmd = html.escape(f"dns lookup TXT {dns_data.get('domain', '<domain>')}")
+        http_cmd = html.escape(f"curl -I {header_data.get('url', '<url>')}")
+
         return f"""
-<section class='grid md:grid-cols-2 gap-4 mt-6'>
-  <article class='bg-slate-800/70 rounded-xl p-4 shadow-xl'>
-    <h3 class='font-semibold mb-2'>DNS</h3>
-    <table class='text-sm w-full'><tbody>{render_kv_rows(dns_data)}</tbody></table>
-  </article>
-  <article class='bg-slate-800/70 rounded-xl p-4 shadow-xl'>
-    <h3 class='font-semibold mb-2'>MX</h3>
-    <table class='text-sm w-full'>
-      <thead><tr><th class='text-left py-1 pr-3 text-slate-400'>Priority</th><th class='text-left py-1 text-slate-400'>Host</th></tr></thead>
-      <tbody>{mx_rows}</tbody>
-    </table>
-  </article>
+<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-6'>
+  <h3 class='font-semibold mb-2' title='{whois_cmd}'>WHOIS</h3>
+  <table class='text-sm w-full'><tbody>{render_kv_rows(whois_summary)}</tbody></table>
 </section>
-<section class='grid md:grid-cols-2 gap-4 mt-4'>
-  <article class='bg-slate-800/70 rounded-xl p-4 shadow-xl'>
-    <h3 class='font-semibold mb-2'>HTTP Headers</h3>
-    <table class='text-sm w-full'>
-      <thead><tr><th class='text-left py-1 pr-3 text-slate-400'>Header</th><th class='text-left py-1 text-slate-400'>Value</th></tr></thead>
-      <tbody>{headers_rows}</tbody>
-    </table>
-  </article>
-  <article class='bg-slate-800/70 rounded-xl p-4 shadow-xl'>
-    <h3 class='font-semibold mb-2'>WHOIS (Key Fields)</h3>
-    <table class='text-sm w-full'><tbody>{render_kv_rows(whois_summary)}</tbody></table>
-  </article>
+<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
+  <h3 class='font-semibold mb-2' title='{dns_a_cmd}'>DNS Summary</h3>
+  <p class='text-sm'><span class='text-slate-400'>Domain:</span> {domain}</p>
+  <p class='text-sm break-all'><span class='text-slate-400'>A Record(s):</span> {html.escape(a_records)}</p>
+</section>
+<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
+  <h3 class='font-semibold mb-2' title='{dns_mx_cmd}'>MX Records</h3>
+  <table class='text-sm w-full'>
+    <thead><tr><th class='text-left py-1 pr-3 text-slate-400'>Priority</th><th class='text-left py-1 text-slate-400'>Host</th></tr></thead>
+    <tbody>{mx_rows}</tbody>
+  </table>
+</section>
+<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
+  <h3 class='font-semibold mb-2' title='{dns_ns_cmd}'>NS Records</h3>
+  <ul class='list-disc pl-5 text-sm space-y-1'>{ns_rows}</ul>
+</section>
+<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
+  <h3 class='font-semibold mb-2' title='{dns_txt_cmd}'>TXT Records</h3>
+  <ul class='list-disc pl-5 text-sm space-y-1'>{txt_rows}</ul>
+</section>
+<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
+  <h3 class='font-semibold mb-2' title='{http_cmd}'>HTTP Headers</h3>
+  <table class='text-sm w-full'>
+    <tbody>
+      <tr><td class='py-1 pr-3 text-slate-400'>url</td><td class='py-1 break-all'>{html.escape(str(header_data.get('url', '-')))}</td></tr>
+      <tr><td class='py-1 pr-3 text-slate-400'>status_code</td><td class='py-1'>{html.escape(str(header_data.get('status_code', '-')))}</td></tr>
+      <tr><td class='py-1 pr-3 text-slate-400'>final_url</td><td class='py-1 break-all'>{html.escape(str(header_data.get('final_url', '-')))}</td></tr>
+      <tr><td class='py-1 pr-3 text-slate-400'>tor_routed</td><td class='py-1'>{html.escape(str(header_data.get('tor_routed', '-')))}</td></tr>
+    </tbody>
+  </table>
+  <table class='text-sm w-full mt-3'>
+    <thead><tr><th class='text-left py-1 pr-3 text-slate-400'>Header</th><th class='text-left py-1 text-slate-400'>Value</th></tr></thead>
+    <tbody>{headers_rows}</tbody>
+  </table>
 </section>
 {json_panel}
 """
@@ -141,7 +164,7 @@ def build_app(
         show_json: bool = False,
         error: str = "",
         notice: str = "",
-        manifest_url: str = "",
+        update_source: str = "",
     ) -> str:
         current_tor_ok = get_tor_ok()
         shield_class = "bg-emerald-600" if current_tor_ok else "bg-red-600"
@@ -167,11 +190,12 @@ def build_app(
     <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
       <h2 class='text-lg font-semibold'>Tor Setup</h2>
       <p class='text-sm text-slate-300 mt-1'>No verified Tor route detected. You can bootstrap or update managed Tor runtime now.</p>
+      <p class='text-xs text-slate-400 mt-2 break-all'>{html.escape(update_source)}</p>
       <form method='post' action='/tor/manage' class='mt-3 space-y-3'>
-        <div>
-          <label class='block text-sm mb-1'>Update Manifest URL (optional)</label>
-          <input name='manifest_url' value='{html.escape(manifest_url)}' placeholder='https://host/tor-manifest.json' class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm' />
-        </div>
+        <label class='flex items-center gap-2 text-sm'>
+          <input type='checkbox' name='confirm_download' />
+          Confirm download from the source above
+        </label>
         <button name='force_update' value='1' class='bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-lg font-semibold'>Install / Update Managed Tor</button>
       </form>
     </section>
@@ -233,7 +257,12 @@ def build_app(
 
     @app.get("/", response_class=HTMLResponse)
     async def home() -> HTMLResponse:
-        return HTMLResponse(render_page(route_mode="stealth", manifest_url=tor_engine.updater.manifest_url or ""))
+        return HTMLResponse(
+            render_page(
+                route_mode="stealth",
+                update_source=tor_engine.preview_update_source(),
+            )
+        )
 
     @app.post("/query", response_class=HTMLResponse)
     async def query(
@@ -257,7 +286,7 @@ def build_app(
                     route_mode=query_engine.config.route_mode,
                     show_json=bool(show_json),
                     notice=notice,
-                    manifest_url=tor_engine.updater.manifest_url or "",
+                    update_source=tor_engine.preview_update_source(),
                 )
             )
         except Exception as exc:
@@ -268,20 +297,24 @@ def build_app(
                     route_mode=query_engine.config.route_mode,
                     show_json=bool(show_json),
                     error=str(exc),
-                    manifest_url=tor_engine.updater.manifest_url or "",
+                    update_source=tor_engine.preview_update_source(),
                 )
             )
 
     @app.post("/tor/manage", response_class=HTMLResponse)
-    async def tor_manage(force_update: str | None = Form(None), manifest_url: str | None = Form(None)) -> HTMLResponse:
-        if manifest_url and manifest_url.strip():
-            tor_engine.updater.manifest_url = manifest_url.strip()
-        message = tor_engine.manage_tor_runtime(force_update=bool(force_update))
+    async def tor_manage(
+        force_update: str | None = Form(None),
+        confirm_download: str | None = Form(None),
+    ) -> HTMLResponse:
+        if not confirm_download:
+            message = "Confirm download checked was not selected. Review source and confirm to proceed."
+        else:
+            message = tor_engine.manage_tor_runtime(force_update=bool(force_update))
         return HTMLResponse(
             render_page(
                 route_mode="stealth",
                 notice=message,
-                manifest_url=tor_engine.updater.manifest_url or "",
+                update_source=tor_engine.preview_update_source(),
             )
         )
 
