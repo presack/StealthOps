@@ -9,8 +9,6 @@ import shlex
 import sys
 from typing import Callable
 
-import uvicorn
-
 from core_ops import QueryConfig, StealthQueryEngine
 from tor_engine import TorEngine
 from web_ui import build_app
@@ -581,6 +579,12 @@ def run_console(args: argparse.Namespace) -> int:
 
 
 def run_web(args: argparse.Namespace, host_override: str | None = None, port_override: int | None = None) -> None:
+    try:
+        import uvicorn
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Web mode requires uvicorn. Rebuild with dependencies installed (python -m pip install -r requirements.txt)."
+        ) from exc
     app = build_app(
         tor_update_mode=args.tor_update,
         tor_update_manifest=args.tor_update_manifest,
