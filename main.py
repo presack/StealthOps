@@ -244,17 +244,31 @@ def _maybe_prompt_install_tor(tor_engine: TorEngine) -> bool:
     return False
 
 
-def _execute_query(query_engine: StealthQueryEngine, target: str, emit_json: bool) -> int:
+def _execute_query(query_engine: StealthQueryEngine, target: str, emit_json: bool, use_color: bool = False) -> int:
     try:
         result = query_engine.run_all(target)
         if emit_json:
             print(json.dumps(result, indent=2))
         else:
-            print(format_cli_report(result))
+            print(_colorize_report(format_cli_report(result), use_color))
         return 0
     except Exception as exc:
         print(f"error: {exc}")
         return 1
+
+
+def _colorize_report(report: str, use_color: bool) -> str:
+    if not use_color:
+        return report
+    out = []
+    for line in report.splitlines():
+        if line.startswith("==="):
+            out.append(_c(True, line, "96"))
+        elif line.startswith("error:"):
+            out.append(_c(True, line, "91"))
+        else:
+            out.append(line)
+    return "\n".join(out)
 
 
 def _truncate_text(value: str, max_len: int = 64) -> str:
@@ -285,21 +299,6 @@ def _render_console_banner(
     emit_json: bool,
     use_color: bool,
 ) -> str:
-    route = "Stealth" if query_engine.config.route_mode == "stealth" else "Public"
-    if query_engine.config.route_mode == "public":
-        tor_status = "Bypassed (Public Mode)"
-    elif tor_ok:
-        tor_status = f"Socks Proxy {tor_engine.socks_host}:{tor_engine.socks_port}"
-    else:
-        err = _truncate_text(tor_engine.last_error or "Unavailable")
-        tor_status = f"Unavailable ({err})"
-
-    block_mode = "On" if query_engine.config.block_non_tor else "Off"
-    output_mode = "JSON" if emit_json else "Pretty"
-    route_disp = _c(use_color, route, "96" if route == "Stealth" else "93")
-    tor_disp = _c(use_color, tor_status, "92" if tor_ok and query_engine.config.route_mode == "stealth" else "93")
-    block_disp = _c(use_color, block_mode, "91" if block_mode == "On" else "90")
-    output_disp = _c(use_color, output_mode, "95" if output_mode == "JSON" else "97")
     title = _c(use_color, "[ PRIVACY-CENTRIC NETWORK INTELLIGENCE ]", "92")
     rule = _c(use_color, "  _____________________________________________________________", "90")
     art_lines = [
@@ -316,11 +315,39 @@ def _render_console_banner(
         f"{art}\n"
         f"   {title}\n"
         "\n"
+        f"{_render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color)}\n"
+        f"{rule}"
+    )
+
+
+def _render_status_lines(
+    query_engine: StealthQueryEngine,
+    tor_engine: TorEngine,
+    tor_ok: bool,
+    emit_json: bool,
+    use_color: bool,
+) -> str:
+    route = "Stealth" if query_engine.config.route_mode == "stealth" else "Public"
+    if query_engine.config.route_mode == "public":
+        tor_status = "Bypassed (Public Mode)"
+    elif tor_ok:
+        tor_status = f"Socks Proxy {tor_engine.socks_host}:{tor_engine.socks_port}"
+    else:
+        err = _truncate_text(tor_engine.last_error or "Unavailable")
+        tor_status = f"Unavailable ({err})"
+
+    block_mode = "On" if query_engine.config.block_non_tor else "Off"
+    output_mode = "JSON" if emit_json else "Pretty"
+    route_disp = _c(use_color, route, "96" if route == "Stealth" else "93")
+    tor_disp = _c(use_color, tor_status, "92" if tor_ok and query_engine.config.route_mode == "stealth" else "93")
+    block_disp = _c(use_color, block_mode, "91" if block_mode == "On" else "90")
+    output_disp = _c(use_color, output_mode, "95" if output_mode == "JSON" else "97")
+
+    return (
         f"  > Route Mode ...................... [{route_disp}]\n"
         f"  > TOR Routing ..................... [{tor_disp}]\n"
         f"  > Block Non-TOR ................... [{block_disp}]\n"
-        f"  > Output Mode ..................... [{output_disp}]\n"
-        f"{rule}"
+        f"  > Output Mode ..................... [{output_disp}]"
     )
 
 
@@ -354,7 +381,7 @@ def run_cli(args: argparse.Namespace) -> int:
     if tor_engine.last_error:
         print(f"[privacy] notice={tor_engine.last_error}")
 
-    return _execute_query(query_engine, args.query, args.json)
+    return _execute_query(query_engine, args.query, args.json, use_color=False)
 
 
 def run_console(args: argparse.Namespace) -> int:
@@ -378,8 +405,11 @@ def run_console(args: argparse.Namespace) -> int:
         QueryConfig(block_non_tor=block_non_tor, route_mode=route_mode),
     )
 
+    os.system("cls" if os.name == "nt" else "clear")
     print(_render_console_banner(query_engine, tor_engine, tor_ok, emit_json, use_color))
+    print("")
     print("Type 'help' for commands.")
+    print("")
 
     while True:
         try:
@@ -409,24 +439,39 @@ def run_console(args: argparse.Namespace) -> int:
             print("  mode <stealth|public>  set routing mode")
             print("  tor install            install/update managed Tor runtime")
             print("  tor status             show Tor status")
+            print("  banner                 print full intro banner")
             print("  status                 print console status banner")
             print("  block <on|off>         set block non-tor mode")
             print("  json <on|off>          toggle JSON output")
+            print("  clear                  clear the screen")
             print("  exit                   quit console")
+            print("")
+            continue
+        if cmd == "clear":
+            os.system("cls" if os.name == "nt" else "clear")
+            print("")
+            continue
+        if cmd == "banner":
+            print(_render_console_banner(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print("")
             continue
         if cmd == "status":
-            print(_render_console_banner(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print(_render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print("")
             continue
         if cmd == "query":
             if len(parts) < 2:
                 print("usage: query <target>")
+                print("")
                 continue
             target = parts[1]
-            _execute_query(query_engine, target, emit_json)
+            _execute_query(query_engine, target, emit_json, use_color=use_color)
+            print("")
             continue
         if cmd == "mode":
             if len(parts) != 2 or parts[1].lower() not in {"stealth", "public"}:
                 print("usage: mode <stealth|public>")
+                print("")
                 continue
             route_mode = parts[1].lower()
             query_engine.config.route_mode = route_mode
@@ -436,11 +481,13 @@ def run_console(args: argparse.Namespace) -> int:
                     tor_ok = _maybe_prompt_install_tor(tor_engine)
             else:
                 tor_ok = False
-            print(f"[privacy] route_mode={route_mode} tor_verified={tor_ok}")
+            print(_render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print("")
             continue
         if cmd == "tor":
             if len(parts) != 2 or parts[1].lower() not in {"install", "status"}:
                 print("usage: tor <install|status>")
+                print("")
                 continue
             action = parts[1].lower()
             if action == "install":
@@ -448,33 +495,39 @@ def run_console(args: argparse.Namespace) -> int:
                 message = tor_engine.manage_tor_runtime(force_update=True)
                 print(f"[privacy] tor_runtime={message}")
                 tor_ok = tor_engine.ensure_tor() if query_engine.config.route_mode == "stealth" else False
-                print(f"[privacy] tor_verified={tor_ok}")
+                print(_render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
             else:
                 if query_engine.config.route_mode == "stealth":
                     tor_ok = tor_engine.ensure_tor()
-                print(f"[privacy] route_mode={query_engine.config.route_mode} tor_verified={tor_ok}")
+                print(_render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
                 if tor_engine.last_update_message:
                     print(f"[privacy] tor_runtime={tor_engine.last_update_message}")
                 if tor_engine.last_error:
                     print(f"[privacy] notice={tor_engine.last_error}")
+            print("")
             continue
         if cmd == "block":
             if len(parts) != 2 or parts[1].lower() not in {"on", "off"}:
                 print("usage: block <on|off>")
+                print("")
                 continue
             block_non_tor = parts[1].lower() == "on"
             query_engine.config.block_non_tor = block_non_tor
-            print(f"[privacy] block_non_tor={block_non_tor}")
+            print(_render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print("")
             continue
         if cmd == "json":
             if len(parts) != 2 or parts[1].lower() not in {"on", "off"}:
                 print("usage: json <on|off>")
+                print("")
                 continue
             emit_json = parts[1].lower() == "on"
-            print(f"[output] json={emit_json}")
+            print(_render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print("")
             continue
 
         print("unknown command. type 'help'")
+        print("")
 
 
 def run_web(args: argparse.Namespace) -> None:

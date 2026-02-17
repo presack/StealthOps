@@ -161,8 +161,10 @@ Console commands:
 - `mode <stealth|public>`
 - `tor install`
 - `tor status`
+- `banner`
 - `block <on|off>`
 - `json <on|off>`
+- `clear`
 - `exit`
 
 ## Update Manifest Format
