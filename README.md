@@ -70,6 +70,13 @@ python main.py
 
 This starts FastAPI on `127.0.0.1:5000`.
 
+Web controls:
+
+- `Run Stealth Query (Tor)`: attempts Tor-routed requests.
+- `Run Fast Query (Public)`: bypasses Tor for speed.
+- `Block Non-Tor Traffic`: fail closed when Tor mode is selected and Tor is unavailable.
+- `Install / Update Managed Tor`: appears when Tor is not verified and triggers managed runtime bootstrap/update.
+
 ### CLI mode
 
 ```powershell

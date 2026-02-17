@@ -233,6 +233,30 @@ class TorEngine:
 
         return self.verify_circuit()
 
+    def manage_tor_runtime(self, force_update: bool = False) -> str:
+        messages: list[str] = []
+
+        managed_tor = self.updater.managed_tor_exe
+        if not managed_tor.exists():
+            bundled = self._bundled_tor_path()
+            if bundled:
+                installed = self.updater.bootstrap_from_bundle(bundled.parent)
+                if installed:
+                    messages.append("managed tor bootstrapped from bundled runtime")
+            else:
+                messages.append("no bundled tor runtime found")
+
+        mode = "force" if force_update else self.tor_update_mode
+        update_result = self.updater.maybe_update(mode=mode)
+        if update_result.message:
+            messages.append(update_result.message)
+
+        tor_ok = self.ensure_tor()
+        messages.append("tor verified" if tor_ok else f"tor unavailable: {self.last_error or 'unknown error'}")
+
+        self.last_update_message = "; ".join(messages)
+        return self.last_update_message
+
     def stop_tor(self) -> None:
         if self.process is None:
             return

@@ -15,6 +15,7 @@ from tor_engine import TorEngine
 @dataclass
 class QueryConfig:
     block_non_tor: bool = False
+    route_mode: str = "stealth"
 
 
 class StealthQueryEngine:
@@ -23,6 +24,9 @@ class StealthQueryEngine:
         self.config = config or QueryConfig()
 
     def _proxies(self) -> dict[str, str] | None:
+        if self.config.route_mode == "public":
+            return None
+
         if self.tor_engine.verify_circuit():
             proxy = self.tor_engine.proxy_url
             return {"http": proxy, "https": proxy}
