@@ -65,6 +65,10 @@ def format_cli_report(result: dict) -> str:
     lines.append(f"A: {', '.join(dns_data.get('a', [])) or '-'}")
     lines.append(f"AAAA: {', '.join(dns_data.get('aaaa', [])) or '-'}")
     lines.append(f"NS: {', '.join(dns_data.get('ns', [])) or '-'}")
+    lines.append(f"TXT: {', '.join(dns_data.get('txt', [])) or '-'}")
+    lines.append(f"CNAME: {', '.join(dns_data.get('cname', [])) or '-'}")
+    lines.append(f"CAA: {', '.join(dns_data.get('caa', [])) or '-'}")
+    lines.append(f"SOA: {', '.join(dns_data.get('soa', [])) or '-'}")
     for key in sorted(k for k in dns_data.keys() if k.endswith(('_error', '_warning'))):
         lines.append(f"{key}: {dns_data.get(key)}")
 

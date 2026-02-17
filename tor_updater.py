@@ -16,6 +16,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -129,6 +130,46 @@ class TorUpdater:
             candidates = [p for p in root.rglob("tor") if p.is_file()]
         return candidates[0] if candidates else None
 
+    @staticmethod
+    def _version_key(version: str) -> tuple[int, ...]:
+        return tuple(int(part) for part in version.split("."))
+
+    def _fetch_official_tor_project_manifest(self) -> dict[str, Any]:
+        page_url = "https://www.torproject.org/download/tor/"
+        response = requests.get(page_url, timeout=20)
+        response.raise_for_status()
+        html_text = response.text
+
+        matches = re.findall(
+            r'href=["\']([^"\']*tor-expert-bundle-windows-x86_64-([0-9]+(?:\.[0-9]+)+)\.tar\.gz)["\']',
+            html_text,
+        )
+        if not matches:
+            raise RuntimeError("unable to discover tor expert bundle from torproject.org download page")
+
+        candidates: list[tuple[str, str]] = []
+        for href, version in matches:
+            absolute_url = urljoin(page_url, href)
+            candidates.append((version, absolute_url))
+
+        latest_version, windows_url = sorted(candidates, key=lambda item: self._version_key(item[0]))[-1]
+        filename = Path(urlparse(windows_url).path).name
+        sums_url = urljoin(windows_url, "sha256sums-signed-build.txt")
+
+        sums_resp = requests.get(sums_url, timeout=20)
+        sums_resp.raise_for_status()
+        expected_sha = None
+        for line in sums_resp.text.splitlines():
+            match = re.match(r"^([A-Fa-f0-9]{64})\s+\*?(.+)$", line.strip())
+            if match and match.group(2).strip() == filename:
+                expected_sha = match.group(1).lower()
+                break
+
+        if not expected_sha:
+            raise RuntimeError(f"could not locate sha256 for {filename} in {sums_url}")
+
+        return {"version": latest_version, "windows_url": windows_url, "sha256": expected_sha}
+
     def _fetch_manifest(self) -> dict[str, Any]:
         manifest_source = self.manifest_url
         if not manifest_source:
@@ -142,7 +183,7 @@ class TorUpdater:
                     break
 
         if not manifest_source:
-            raise RuntimeError("no update manifest configured (set --tor-update-manifest or provide tor-manifest.json)")
+            return self._fetch_official_tor_project_manifest()
 
         if manifest_source.startswith(("http://", "https://")):
             response = requests.get(manifest_source, timeout=20)

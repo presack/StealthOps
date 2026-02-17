@@ -60,9 +60,26 @@ class StealthQueryEngine:
         return resolver
 
     def dns_lookup(self, domain: str) -> dict[str, Any]:
-        out: dict[str, Any] = {"domain": domain, "a": [], "aaaa": [], "ns": []}
+        out: dict[str, Any] = {
+            "domain": domain,
+            "a": [],
+            "aaaa": [],
+            "ns": [],
+            "txt": [],
+            "cname": [],
+            "caa": [],
+            "soa": [],
+        }
 
-        for rtype, key in (("A", "a"), ("AAAA", "aaaa"), ("NS", "ns")):
+        for rtype, key in (
+            ("A", "a"),
+            ("AAAA", "aaaa"),
+            ("NS", "ns"),
+            ("TXT", "txt"),
+            ("CNAME", "cname"),
+            ("CAA", "caa"),
+            ("SOA", "soa"),
+        ):
             try:
                 out[key] = self._doh_query(domain, rtype)
             except Exception as doh_exc:

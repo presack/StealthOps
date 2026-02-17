@@ -17,7 +17,7 @@ It supports both CLI and web dashboard workflows and defaults to Tor-routed oper
   - Can bootstrap managed runtime from bundled Tor files
   - Optional update checks with modes: `auto`, `force`, `off`
 - Query engine modules:
-  - DNS lookup
+  - DNS lookup (A, AAAA, NS, TXT, CNAME, CAA, SOA)
   - MX lookup
   - WHOIS lookup
   - HTTP header inspection
@@ -130,6 +130,7 @@ Expected JSON keys:
 
 - `sha256` is required and enforced before activation.
 - In `auto` mode, update checks are TTL-based (default 24 hours).
+- If no manifest is provided, updater attempts to discover latest Windows Tor Expert Bundle directly from `torproject.org` and resolves SHA256 from `sha256sums-signed-build.txt`.
 
 ## PyInstaller (single EXE)
 
