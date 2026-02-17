@@ -136,29 +136,8 @@ def build_app(
             ]
             if key in address_data
         }
-        whois_summary = {
-            key: whois_data.get(key)
-            for key in [
-                "domain_name",
-                "registry_domain_id",
-                "whois_server",
-                "registrar_url",
-                "registrar",
-                "registrar_iana_id",
-                "registrar_abuse_contact_email",
-                "registrar_abuse_contact_phone",
-                "creation_date",
-                "updated_date",
-                "expiration_date",
-                "org",
-                "country",
-                "name_servers",
-                "status",
-                "dnssec",
-                "whois_error",
-            ]
-            if key in whois_data
-        }
+        whois_record = str(whois_data.get("domain_whois_record", "")).strip()
+        whois_error = str(whois_data.get("whois_error", "")).strip()
         network_whois_record = str(network_whois_data.get("network_whois_record", "")).strip()
         network_notice = str(
             network_whois_data.get("network_whois_warning")
@@ -170,6 +149,16 @@ def build_app(
             dns_notices.append(f"DNS query issue ({key}): {dns_data.get(key)}")
         if mx_data.get("mx_error"):
             dns_notices.append(f"DNS query issue (mx_error): {mx_data.get('mx_error')}")
+
+        def format_soa_data(value: str) -> str:
+            parts = str(value).split()
+            if len(parts) < 7:
+                return str(value)
+            mname, rname, serial, refresh, retry, expire, minimum = parts[:7]
+            return (
+                f"mname={mname}; rname={rname}; serial={serial}; "
+                f"refresh={refresh}; retry={retry}; expire={expire}; minimum={minimum}"
+            )
 
         dns_rows = []
         domain = str(dns_data.get("domain", "-"))
@@ -185,26 +174,27 @@ def build_app(
         ):
             values = dns_data.get(key, [])
             for value in values:
+                data_value = format_soa_data(str(value)) if rtype == "SOA" else str(value)
                 dns_rows.append(
                     "<tr>"
-                    f"<td class='py-1 pr-3 break-all'>{html.escape(domain)}</td>"
-                    "<td class='py-1 pr-3'>IN</td>"
-                    f"<td class='py-1 pr-3'>{rtype}</td>"
-                    f"<td class='py-1 break-all'>{html.escape(str(value))}</td>"
-                    "<td class='py-1 text-slate-400'>-</td>"
+                    f"<td class='py-1 pr-3 align-top whitespace-nowrap'>{html.escape(domain)}</td>"
+                    "<td class='py-1 pr-3 align-top whitespace-nowrap'>IN</td>"
+                    f"<td class='py-1 pr-3 align-top whitespace-nowrap'>{rtype}</td>"
+                    f"<td class='py-1 align-top break-all'>{html.escape(data_value)}</td>"
+                    "<td class='py-1 pl-3 align-top text-slate-400 whitespace-nowrap'>-</td>"
                     "</tr>"
                 )
         for mx in mx_data.get("mx", []):
             priority = mx.get("priority")
             host = mx.get("host", "-")
-            data_value = f"{priority} {host}" if priority is not None else str(host)
+            data_value = f"preference={priority}; exchange={host}" if priority is not None else f"exchange={host}"
             dns_rows.append(
                 "<tr>"
-                f"<td class='py-1 pr-3 break-all'>{html.escape(domain)}</td>"
-                "<td class='py-1 pr-3'>IN</td>"
-                "<td class='py-1 pr-3'>MX</td>"
-                f"<td class='py-1 break-all'>{html.escape(data_value)}</td>"
-                "<td class='py-1 text-slate-400'>-</td>"
+                f"<td class='py-1 pr-3 align-top whitespace-nowrap'>{html.escape(domain)}</td>"
+                "<td class='py-1 pr-3 align-top whitespace-nowrap'>IN</td>"
+                "<td class='py-1 pr-3 align-top whitespace-nowrap'>MX</td>"
+                f"<td class='py-1 align-top break-all'>{html.escape(data_value)}</td>"
+                "<td class='py-1 pl-3 align-top text-slate-400 whitespace-nowrap'>-</td>"
                 "</tr>"
             )
         dns_records_html = "".join(dns_rows) if dns_rows else "<tr><td class='py-1 pr-3' colspan='5'>No DNS records</td></tr>"
@@ -241,8 +231,9 @@ def build_app(
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2' title='{whois_cmd}'>Domain Whois summary</h3>
-  <div class='min-h-[12rem]'>
-    <table class='text-sm w-full'><tbody>{render_kv_rows(whois_summary) if whois_summary else "<tr><td class='text-slate-400 text-sm'>Awaiting data...</td></tr>"}</tbody></table>
+  <div class='min-h-[18rem]'>
+    {("<p class='text-amber-300 text-xs mb-2 break-words'>" + html.escape(whois_error) + "</p>") if whois_error else ""}
+    {render_record_lines(whois_record) if whois_record else "<p class='text-slate-400 text-sm'>Awaiting data...</p>"}
   </div>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
@@ -255,7 +246,7 @@ def build_app(
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2'>DNS records</h3>
   {"".join("<p class='text-amber-300 text-xs mb-2 break-words'>" + html.escape(note) + "</p>" for note in dns_notices)}
-  <table class='text-sm w-full'>
+  <table class='text-sm w-full table-auto'>
     <thead><tr><th class='text-left py-1 pr-3 text-slate-400'>Name</th><th class='text-left py-1 pr-3 text-slate-400'>Class</th><th class='text-left py-1 pr-3 text-slate-400'>Type</th><th class='text-left py-1 text-slate-400'>Data</th><th class='text-left py-1 pl-3 text-slate-400'>TTL</th></tr></thead>
     <tbody>{dns_records_html}</tbody>
   </table>
@@ -406,7 +397,7 @@ def build_app(
         ev.preventDefault();
         panel.innerHTML = ""
           + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-6'><h3 class='font-semibold mb-2'>Address lookup</h3><div class='min-h-[9rem] text-slate-400 text-sm'>Collecting...</div></section>"
-          + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Domain Whois summary</h3><div class='min-h-[12rem] text-slate-400 text-sm'>Collecting...</div></section>"
+          + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Domain Whois summary</h3><div class='min-h-[18rem] text-slate-400 text-sm'>Collecting...</div></section>"
           + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Network Whois record</h3><div class='min-h-[12rem] text-slate-400 text-sm'>Collecting...</div></section>";
         const body = new FormData(form);
         const res = await fetch('/query/start', {{ method: 'POST', body }});

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 import ipaddress
 import socket
 from dataclasses import dataclass
@@ -109,6 +110,148 @@ class StealthQueryEngine:
         if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in second_level_tokens:
             return ".".join(labels[-3:])
         return ".".join(labels[-2:])
+
+    @staticmethod
+    def _first_non_empty(data: dict[str, Any], keys: list[str]) -> str:
+        for key in keys:
+            if key not in data:
+                continue
+            value = data.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    text = str(item).strip()
+                    if text:
+                        return text
+                continue
+            text = str(value).strip() if value is not None else ""
+            if text:
+                return text
+        return ""
+
+    @staticmethod
+    def _list_non_empty(data: dict[str, Any], keys: list[str]) -> list[str]:
+        out: list[str] = []
+        for key in keys:
+            if key not in data:
+                continue
+            value = data.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    text = str(item).strip()
+                    if text and text not in out:
+                        out.append(text)
+            elif value is not None:
+                text = str(value).strip()
+                if text and text not in out:
+                    out.append(text)
+        return out
+
+    @staticmethod
+    def _format_whois_date(value: Any) -> str:
+        if isinstance(value, list):
+            value = value[0] if value else ""
+        text = str(value).strip() if value is not None else ""
+        if not text:
+            return ""
+        # python-whois may return datelike strings; convert to Central Ops-style DD-Mon-YYYY when possible.
+        candidates = [text]
+        if " " in text:
+            candidates.append(text.split(" ", 1)[0])
+        for candidate in candidates:
+            try:
+                dt = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+                return dt.strftime("%d-%b-%Y")
+            except ValueError:
+                pass
+            for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%b-%Y", "%d-%B-%Y"):
+                try:
+                    dt = datetime.strptime(candidate, fmt)
+                    return dt.strftime("%d-%b-%Y")
+                except ValueError:
+                    continue
+        return text
+
+    @classmethod
+    def _build_contact_block(cls, data: dict[str, Any], title: str, prefixes: list[str]) -> list[str]:
+        def k(name: str) -> list[str]:
+            out = [name]
+            for prefix in prefixes:
+                out.append(f"{prefix}{name}")
+                if prefix and not prefix.endswith("_"):
+                    out.append(f"{prefix}_{name}")
+            return out
+
+        name = cls._first_non_empty(data, k("name"))
+        org = cls._first_non_empty(data, k("organization") + k("org"))
+        street = cls._first_non_empty(data, k("street") + k("address"))
+        city = cls._first_non_empty(data, k("city"))
+        state = cls._first_non_empty(data, k("state") + k("province"))
+        postal = cls._first_non_empty(data, k("postal_code") + k("postcode") + k("zipcode"))
+        country = cls._first_non_empty(data, k("country"))
+        phone = cls._first_non_empty(data, k("phone"))
+        email = cls._first_non_empty(data, k("email") + k("emails"))
+
+        lines: list[str] = [f"{title}:"]
+        rendered = []
+        for part in (name, org, street):
+            if part:
+                rendered.append(part)
+
+        city_line = ""
+        if city and state and postal:
+            city_line = f"{city}, {state} {postal}"
+        elif city and state:
+            city_line = f"{city}, {state}"
+        elif city and postal:
+            city_line = f"{city} {postal}"
+        else:
+            city_line = city or state or postal
+        if city_line:
+            rendered.append(city_line)
+
+        for part in (country, phone, email):
+            if part:
+                rendered.append(part)
+
+        if not rendered:
+            lines.append("\t")
+        else:
+            for part in rendered:
+                lines.append(f"\t{part}")
+        lines.append("")
+        return lines
+
+    @classmethod
+    def _build_domain_whois_record(cls, data: dict[str, Any], domain_fallback: str) -> str:
+        domain_name = cls._first_non_empty(data, ["domain_name", "domain"]) or domain_fallback
+        name_servers = cls._list_non_empty(data, ["name_servers"])
+        creation = cls._format_whois_date(data.get("creation_date"))
+        updated = cls._format_whois_date(data.get("updated_date"))
+        expiration = cls._format_whois_date(data.get("expiration_date"))
+
+        lines: list[str] = []
+        lines.append(f"Domain Name: {str(domain_name).upper()}")
+        lines.append("")
+        lines.extend(cls._build_contact_block(data, "Registrant", ["registrant_", ""]))
+        lines.extend(cls._build_contact_block(data, "Administrative Contact", ["admin_", "administrative_", ""]))
+        lines.extend(cls._build_contact_block(data, "Technical Contact", ["tech_", "technical_", ""]))
+
+        lines.append("Name Servers:")
+        if name_servers:
+            for ns in name_servers:
+                lines.append(f"\t{ns}")
+        else:
+            lines.append("\t")
+        lines.append("")
+
+        if creation:
+            lines.append(f"{'Domain record activated:':<28} {creation}")
+        if updated:
+            lines.append(f"{'Domain record last updated:':<28} {updated}")
+        if expiration:
+            lines.append(f"{'Domain expires:':<28} {expiration}")
+
+        return "\n".join(lines).strip()
 
     def dns_lookup(self, domain: str) -> dict[str, Any]:
         out = self._empty_dns_payload(domain)
@@ -241,46 +384,7 @@ class StealthQueryEngine:
                 normalized["status"] = sorted(set(compact))
         if raw_chunks:
             normalized["raw_whois"] = "\n\n".join(raw_chunks)
-            normalized["domain_whois_record"] = normalized["raw_whois"]
-        else:
-            lines: list[str] = []
-            ordered_fields = [
-                ("Domain Name", "domain_name"),
-                ("Registry Domain ID", "registry_domain_id"),
-                ("Registrar WHOIS Server", "whois_server"),
-                ("Registrar URL", "registrar_url"),
-                ("Updated Date", "updated_date"),
-                ("Creation Date", "creation_date"),
-                ("Registry Expiry Date", "expiration_date"),
-                ("Registrar", "registrar"),
-                ("Registrar IANA ID", "registrar_iana_id"),
-                ("Registrar Abuse Contact Email", "registrar_abuse_contact_email"),
-                ("Registrar Abuse Contact Phone", "registrar_abuse_contact_phone"),
-                ("Registrant Organization", "org"),
-                ("Registrant Country", "country"),
-                ("DNSSEC", "dnssec"),
-            ]
-            for label, key in ordered_fields:
-                value = normalized.get(key)
-                if value in (None, "", []):
-                    continue
-                if isinstance(value, list):
-                    lines.append(f"{label}: {', '.join(str(v) for v in value)}")
-                else:
-                    lines.append(f"{label}: {value}")
-            statuses = normalized.get("status")
-            if isinstance(statuses, list):
-                for status in statuses:
-                    lines.append(f"Domain Status: {status}")
-            elif statuses:
-                lines.append(f"Domain Status: {statuses}")
-            name_servers = normalized.get("name_servers")
-            if isinstance(name_servers, list):
-                for ns in name_servers:
-                    lines.append(f"Name Server: {ns}")
-            elif name_servers:
-                lines.append(f"Name Server: {name_servers}")
-            normalized["domain_whois_record"] = "\n".join(lines).strip()
+        normalized["domain_whois_record"] = self._build_domain_whois_record(normalized, domain)
         normalized["domain"] = domain
         return normalized
 

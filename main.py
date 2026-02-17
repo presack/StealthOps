@@ -140,12 +140,14 @@ def format_cli_report(result: dict) -> str:
 
     lines.append("")
     lines.append("=== WHOIS ===  [source: whois <domain>]")
-    for field in ["domain_name", "registrar", "creation_date", "expiration_date", "status", "whois_error"]:
-        if field in whois_data:
-            value = whois_data[field]
-            if isinstance(value, list):
-                value = ", ".join(str(v) for v in value) if value else "-"
-            lines.append(f"{human_label(field)}: {value}")
+    whois_record = str(whois_data.get("domain_whois_record", "")).strip()
+    whois_error = str(whois_data.get("whois_error", "")).strip()
+    if whois_record:
+        lines.extend(whois_record.splitlines())
+    elif whois_error:
+        lines.append(f"WHOIS Error: {whois_error}")
+    else:
+        lines.append("Awaiting data...")
 
     lines.append("")
     lines.append("=== DNS SUMMARY ===  [source: dns query A/AAAA]")
