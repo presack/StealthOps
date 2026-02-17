@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+dnspython
+python-whois
+requests[socks]
+stem
+pysocks
+python-multipart
