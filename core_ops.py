@@ -136,7 +136,7 @@ class StealthQueryEngine:
             if key not in data:
                 continue
             value = data.get(key)
-            if isinstance(value, list):
+            if isinstance(value, (list, tuple, set)):
                 for item in value:
                     text = str(item).strip()
                     if text and text not in out:
@@ -269,6 +269,7 @@ class StealthQueryEngine:
         raw_whois: str,
         raw_headers: list[str],
         raw_label_roots: list[str],
+        contact_role: str,
     ) -> list[str]:
         def k(name: str) -> list[str]:
             out = [name]
@@ -286,6 +287,13 @@ class StealthQueryEngine:
             lines.append("")
             return lines
 
+        contact = {}
+        contacts_obj = data.get("contacts")
+        if isinstance(contacts_obj, dict):
+            candidate = contacts_obj.get(contact_role)
+            if isinstance(candidate, dict):
+                contact = candidate
+
         def raw_labels(suffixes: list[str]) -> list[str]:
             labels: list[str] = []
             for root in raw_label_roots:
@@ -293,31 +301,34 @@ class StealthQueryEngine:
                     labels.append(f"{root} {suffix}".strip())
             return labels
 
-        name = cls._first_non_empty(data, k("name"))
+        name = cls._first_non_empty(contact, ["name"]) or cls._first_non_empty(data, k("name"))
         if not name:
             name = cls._raw_first_value(raw_whois, raw_labels(["Name", "Contact", "Contact Name"]))
-        org = cls._first_non_empty(data, k("organization") + k("org"))
+        org = cls._first_non_empty(contact, ["organization", "org"]) or cls._first_non_empty(data, k("organization") + k("org"))
         if not org:
             org = cls._raw_first_value(raw_whois, raw_labels(["Organization", "Org"]))
-        street = cls._first_non_empty(data, k("street") + k("address"))
+        street = cls._first_non_empty(contact, ["street", "address", "address1"]) or cls._first_non_empty(data, k("street") + k("address"))
         if not street:
             street = cls._raw_first_value(raw_whois, raw_labels(["Street", "Address", "Address1"]))
-        city = cls._first_non_empty(data, k("city"))
+        city = cls._first_non_empty(contact, ["city"]) or cls._first_non_empty(data, k("city"))
         if not city:
             city = cls._raw_first_value(raw_whois, raw_labels(["City"]))
-        state = cls._first_non_empty(data, k("state") + k("province"))
+        state = cls._first_non_empty(contact, ["state", "province"]) or cls._first_non_empty(data, k("state") + k("province"))
         if not state:
             state = cls._raw_first_value(raw_whois, raw_labels(["State", "Province", "State/Province"]))
-        postal = cls._first_non_empty(data, k("postal_code") + k("postcode") + k("zipcode"))
+        postal = (
+            cls._first_non_empty(contact, ["postal_code", "postcode", "zipcode", "zip"])
+            or cls._first_non_empty(data, k("postal_code") + k("postcode") + k("zipcode"))
+        )
         if not postal:
             postal = cls._raw_first_value(raw_whois, raw_labels(["Postal Code", "Postcode", "Zip Code", "Zip"]))
-        country = cls._first_non_empty(data, k("country"))
+        country = cls._first_non_empty(contact, ["country"]) or cls._first_non_empty(data, k("country"))
         if not country:
             country = cls._raw_first_value(raw_whois, raw_labels(["Country"]))
-        phone = cls._first_non_empty(data, k("phone"))
+        phone = cls._first_non_empty(contact, ["phone"]) or cls._first_non_empty(data, k("phone"))
         if not phone:
             phone = cls._raw_first_value(raw_whois, raw_labels(["Phone"]))
-        email = cls._first_non_empty(data, k("email") + k("emails"))
+        email = cls._first_non_empty(contact, ["email", "emails"]) or cls._first_non_empty(data, k("email") + k("emails"))
         if not email:
             email = cls._raw_first_value(raw_whois, raw_labels(["Email"]))
 
@@ -387,6 +398,7 @@ class StealthQueryEngine:
                 raw_whois,
                 ["Registrant", "Registrant Contact"],
                 ["Registrant"],
+                "registrant",
             )
         )
         lines.extend(
@@ -397,6 +409,7 @@ class StealthQueryEngine:
                 raw_whois,
                 ["Administrative Contact", "Admin Contact"],
                 ["Admin", "Administrative Contact", "Administrative"],
+                "admin",
             )
         )
         lines.extend(
@@ -407,6 +420,7 @@ class StealthQueryEngine:
                 raw_whois,
                 ["Technical Contact", "Tech Contact"],
                 ["Tech", "Technical Contact", "Technical"],
+                "tech",
             )
         )
 
@@ -538,12 +552,18 @@ class StealthQueryEngine:
                 elif value:
                     raw_chunks.append(str(value))
                 continue
-            if isinstance(value, list):
+            if isinstance(value, (list, tuple, set)):
                 normalized[key] = [str(v) for v in value]
+            elif isinstance(value, dict):
+                normalized[key] = value
             elif value is None:
                 normalized[key] = None
             else:
                 normalized[key] = str(value)
+        if not raw_chunks:
+            text_value = getattr(data, "text", None)
+            if text_value:
+                raw_chunks.append(str(text_value))
         if "status" in normalized:
             statuses = normalized["status"]
             if not isinstance(statuses, list):
