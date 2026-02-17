@@ -91,10 +91,11 @@ python main.py --web --host 127.0.0.1 --port 5000
 
 Web controls:
 
-- `Run Stealth Query (Tor)`: attempts Tor-routed requests.
-- `Run Fast Query (Public)`: bypasses Tor for speed.
+- `Routing Mode` toggle at top:
+  - `Public Mode` (default, fast route)
+  - `Stealth Mode` (Tor-routed when available)
 - `Block Non-Tor Traffic`: fail closed when Tor mode is selected and Tor is unavailable.
-- `Install / Update Managed Tor`: appears when Tor is not verified and triggers managed runtime bootstrap/update.
+- `Install / Update Managed Tor`: appears when Stealth Mode is selected and Tor is not verified.
 - Install/update flow shows the official source URL first and requires confirmation before downloading.
 
 ### CLI mode

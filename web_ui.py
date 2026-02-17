@@ -64,8 +64,7 @@ def build_app(
         tor_update_manifest=tor_update_manifest,
         prefer_system_tor=prefer_system_tor,
     )
-    tor_engine.ensure_tor()
-    query_engine = StealthQueryEngine(tor_engine, QueryConfig(block_non_tor=False))
+    query_engine = StealthQueryEngine(tor_engine, QueryConfig(block_non_tor=False, route_mode="public"))
 
     def get_tor_ok() -> bool:
         if tor_engine.is_proxy_running():
@@ -245,16 +244,27 @@ def build_app(
         results: dict | None = None,
         target: str = "",
         block_non_tor: bool = False,
-        route_mode: str = "stealth",
+        route_mode: str = "public",
         show_json: bool = False,
         error: str = "",
         notice: str = "",
         update_source: str = "",
     ) -> str:
-        current_tor_ok = get_tor_ok()
-        shield_class = "bg-emerald-600" if current_tor_ok else "bg-red-600"
-        shield_text = "TOR ROUTED" if current_tor_ok else "STANDARD ROUTE"
-        warning = "" if current_tor_ok else f"<p class='text-red-400 text-sm mt-2'>Warning: {tor_engine.last_error or 'Tor unavailable'}.</p>"
+        stealth_ready = get_tor_ok()
+        shield_class = "bg-cyan-600" if route_mode == "public" else ("bg-emerald-600" if stealth_ready else "bg-red-600")
+        shield_text = "PUBLIC MODE" if route_mode == "public" else ("STEALTH MODE READY" if stealth_ready else "STEALTH MODE UNAVAILABLE")
+        warning = ""
+        if route_mode == "stealth" and not stealth_ready:
+            warning = f"<p class='text-red-400 text-sm mt-2'>Warning: {tor_engine.last_error or 'Tor unavailable'}.</p>"
+        mode_note = (
+            "<p class='text-cyan-300 text-sm mt-2'>Public Mode: fast routing, not tunneled through Tor.</p>"
+            if route_mode == "public"
+            else (
+                "<p class='text-emerald-300 text-sm mt-2'>Stealth Mode: requests are routed through Tor when available.</p>"
+                if stealth_ready
+                else "<p class='text-amber-300 text-sm mt-2'>Stealth Mode requested, but Tor is not verified yet.</p>"
+            )
+        )
         runtime_note = (
             f"<p class='text-slate-300 text-xs mt-2'>Runtime: {tor_engine.last_update_message}</p>"
             if tor_engine.last_update_message
@@ -267,14 +277,14 @@ def build_app(
         result_html = render_results(results, show_json) if results else ""
 
         error_html = f"<p class='text-red-400 mt-3'>{error}</p>" if error else ""
-        stealth_active = "bg-cyan-600 text-white" if route_mode == "stealth" else "bg-slate-700 text-slate-200"
-        public_active = "bg-orange-600 text-white" if route_mode == "public" else "bg-slate-700 text-slate-200"
+        stealth_active = "bg-emerald-600 text-white" if route_mode == "stealth" else "bg-slate-700 text-slate-200"
+        public_active = "bg-cyan-600 text-white" if route_mode == "public" else "bg-slate-700 text-slate-200"
         tor_manage = ""
-        if not current_tor_ok:
+        if route_mode == "stealth" and not stealth_ready:
             tor_manage = f"""
     <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
       <h2 class='text-lg font-semibold'>Tor Setup</h2>
-      <p class='text-sm text-slate-300 mt-1'>No verified Tor route detected. You can bootstrap or update managed Tor runtime now.</p>
+      <p class='text-sm text-slate-300 mt-1'>No verified Tor route detected for Stealth Mode. You can bootstrap or update managed Tor runtime now.</p>
       <p class='text-xs text-slate-400 mt-1'>Download can take 1-2 minutes depending on connection speed.</p>
       <p class='text-xs text-slate-400 mt-2 break-all'>{html.escape(update_source)}</p>
       <form method='post' action='/tor/manage' class='mt-3 space-y-3' onsubmit="const btn=this.querySelector('button[type=submit]'); if (btn) {{ btn.disabled=true; btn.textContent='Downloading Tor...'; btn.classList.add('opacity-70','cursor-not-allowed'); }}">
@@ -306,7 +316,17 @@ def build_app(
     </header>
 
     {warning}
+    {mode_note}
     {runtime_note}
+
+    <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mb-4'>
+      <h2 class='text-lg font-semibold'>Routing Mode</h2>
+      <p class='text-sm text-slate-300 mt-1'>Switch between fast public routing and Tor-based stealth routing.</p>
+      <form method='post' action='/mode' class='mt-3 flex gap-3'>
+        <button name='route_mode' value='public' class='px-4 py-2 rounded-lg font-semibold {public_active}'>Public Mode</button>
+        <button name='route_mode' value='stealth' class='px-4 py-2 rounded-lg font-semibold {stealth_active}'>Stealth Mode</button>
+      </form>
+    </section>
 
     <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl'>
       <form method='post' action='/query' class='space-y-4'>
@@ -322,9 +342,9 @@ def build_app(
           <input type='checkbox' name='show_json' {show_json_checked} />
           Include Raw JSON Output
         </label>
+        <input type='hidden' name='route_mode' value='{html.escape(route_mode)}' />
         <div class='flex gap-3'>
-          <button name='run_mode' value='stealth' class='px-4 py-2 rounded-lg font-semibold {stealth_active}'>Run Stealth Query (Tor)</button>
-          <button name='run_mode' value='public' class='px-4 py-2 rounded-lg font-semibold {public_active}'>Run Fast Query (Public)</button>
+          <button class='px-4 py-2 rounded-lg font-semibold bg-cyan-600 text-white'>Run Query</button>
         </div>
       </form>
       {error_html}
@@ -345,7 +365,26 @@ def build_app(
     async def home() -> HTMLResponse:
         return HTMLResponse(
             render_page(
-                route_mode="stealth",
+                route_mode=query_engine.config.route_mode,
+                update_source=tor_engine.preview_update_source(),
+            )
+        )
+
+    @app.post("/mode", response_class=HTMLResponse)
+    async def set_mode(route_mode: str = Form("public")) -> HTMLResponse:
+        selected = "stealth" if route_mode == "stealth" else "public"
+        query_engine.config.route_mode = selected
+        notice = f"Routing mode set to {selected}."
+        if selected == "stealth":
+            tor_ok = tor_engine.ensure_tor()
+            if tor_ok:
+                notice = "Routing mode set to stealth. Tor route verified."
+            else:
+                notice = f"Routing mode set to stealth, but Tor is unavailable: {tor_engine.last_error or 'unknown error'}"
+        return HTMLResponse(
+            render_page(
+                route_mode=selected,
+                notice=notice,
                 update_source=tor_engine.preview_update_source(),
             )
         )
@@ -354,16 +393,20 @@ def build_app(
     async def query(
         target: str = Form(...),
         block_non_tor: str | None = Form(None),
-        run_mode: str = Form("stealth"),
+        route_mode: str = Form("public"),
         show_json: str | None = Form(None),
     ) -> HTMLResponse:
         query_engine.config.block_non_tor = bool(block_non_tor)
-        query_engine.config.route_mode = "public" if run_mode == "public" else "stealth"
+        query_engine.config.route_mode = "stealth" if route_mode == "stealth" else "public"
+        if query_engine.config.route_mode == "stealth":
+            tor_engine.ensure_tor()
         try:
             results = query_engine.run_all(target.strip())
             notice = ""
             if query_engine.config.route_mode == "public":
                 notice = "Public mode selected: requests are not routed through Tor."
+            elif not tor_engine.verify_circuit():
+                notice = f"Stealth mode selected, but Tor is not verified: {tor_engine.last_error or 'unknown error'}"
             return HTMLResponse(
                 render_page(
                     results=results,
