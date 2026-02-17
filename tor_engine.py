@@ -6,12 +6,15 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 import requests
 from stem.process import launch_tor_with_config
+
+from tor_updater import TorUpdater
 
 
 class TorEngine:
@@ -23,6 +26,10 @@ class TorEngine:
         socks_port: int = 9050,
         control_port: int = 9051,
         data_dir: str = ".tor_data",
+        tor_update_mode: str = "auto",
+        tor_update_manifest: str | None = None,
+        prefer_system_tor: bool = False,
+        update_ttl_hours: int = 24,
     ) -> None:
         self.socks_host = socks_host
         self.socks_port = socks_port
@@ -30,10 +37,21 @@ class TorEngine:
         self.data_dir = Path(data_dir)
         self.process: Optional[subprocess.Popen] = None
         self.last_error: Optional[str] = None
+        self.last_update_message: Optional[str] = None
+
+        self.tor_update_mode = tor_update_mode
+        self.prefer_system_tor = prefer_system_tor
+        self.updater = TorUpdater(manifest_url=tor_update_manifest, ttl_hours=update_ttl_hours)
 
     @property
     def proxy_url(self) -> str:
         return f"socks5h://{self.socks_host}:{self.socks_port}"
+
+    @staticmethod
+    def _app_base_dir() -> Path:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).resolve().parent
+        return Path.cwd()
 
     def _port_open(self, host: str, port: int, timeout: float = 0.8) -> bool:
         try:
@@ -45,43 +63,98 @@ class TorEngine:
     def is_proxy_running(self) -> bool:
         return self._port_open(self.socks_host, self.socks_port)
 
-    def _find_tor_binary(self) -> Optional[str]:
-        candidates = []
+    def _system_tor_candidates(self) -> list[Path]:
+        candidates: list[Path] = []
 
-        # 1) PATH
         path_hit = shutil.which("tor")
         if path_hit:
-            candidates.append(path_hit)
+            candidates.append(Path(path_hit))
 
-        # 2) Common local bundle locations
-        cwd = Path.cwd()
-        candidates.extend(
-            [
-                str(cwd / "tor" / "tor.exe"),
-                str(cwd / "tor" / "tor"),
-                str(cwd / "bin" / "tor.exe"),
-                str(cwd / "bin" / "tor"),
-            ]
-        )
+        if os.name == "nt":
+            candidates.extend(
+                [
+                    Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Tor Browser" / "Browser" / "TorBrowser" / "Tor" / "tor.exe",
+                    Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Tor" / "tor.exe",
+                    Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "Tor" / "tor.exe",
+                ]
+            )
 
-        # 3) TOR_PATH override
-        env_tor = os.environ.get("TOR_PATH")
-        if env_tor:
-            candidates.insert(0, env_tor)
+        return [p for p in candidates if p.exists()]
+
+    def _bundled_tor_path(self) -> Path | None:
+        base = self._app_base_dir()
+        candidates = [
+            base / "tor" / "tor.exe",
+            base / "tor" / "tor",
+            base / "bin" / "tor.exe",
+            base / "bin" / "tor",
+        ]
+
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            root = Path(meipass)
+            candidates.extend(
+                [
+                    root / "tor" / "tor.exe",
+                    root / "tor" / "tor",
+                    root / "bin" / "tor.exe",
+                    root / "bin" / "tor",
+                ]
+            )
 
         for candidate in candidates:
-            if candidate and Path(candidate).exists():
+            if candidate.exists():
                 return candidate
         return None
+
+    def _select_tor_binary(self) -> Optional[str]:
+        env_tor = os.environ.get("TOR_PATH")
+        if env_tor and Path(env_tor).exists():
+            self.last_update_message = "using TOR_PATH override"
+            return env_tor
+
+        system_candidates = self._system_tor_candidates()
+        system_tor = str(system_candidates[0]) if system_candidates else None
+
+        managed_tor = self.updater.managed_tor_exe
+        if not managed_tor.exists():
+            bundled = self._bundled_tor_path()
+            if bundled:
+                bootstrapped = self.updater.bootstrap_from_bundle(bundled.parent)
+                if bootstrapped:
+                    managed_tor = bootstrapped
+                    self.last_update_message = "bootstrapped managed tor from bundled runtime"
+
+        managed_exists = managed_tor.exists()
+
+        selected: str | None
+        if self.prefer_system_tor and system_tor:
+            selected = system_tor
+            self.last_update_message = "using system tor"
+        elif managed_exists:
+            selected = str(managed_tor)
+        elif system_tor:
+            selected = system_tor
+            self.last_update_message = "using system tor (managed runtime unavailable)"
+        else:
+            selected = None
+
+        if selected and Path(selected) == managed_tor:
+            update_result = self.updater.maybe_update(mode=self.tor_update_mode)
+            self.last_update_message = update_result.message
+            if update_result.updated and self.updater.managed_tor_exe.exists():
+                selected = str(self.updater.managed_tor_exe)
+
+        return selected
 
     def start_tor(self, timeout: int = 45) -> bool:
         if self.is_proxy_running():
             self.last_error = None
             return True
 
-        tor_cmd = self._find_tor_binary()
+        tor_cmd = self._select_tor_binary()
         if not tor_cmd:
-            self.last_error = "tor binary not found (set TOR_PATH or bundle tor executable)"
+            self.last_error = "tor binary not found (set TOR_PATH, install tor, or bundle tor runtime)"
             return False
 
         self.data_dir.mkdir(exist_ok=True)

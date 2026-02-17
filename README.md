@@ -12,6 +12,10 @@ It supports both CLI and web dashboard workflows and defaults to Tor-routed oper
   - Detect existing Tor SOCKS proxy (`127.0.0.1:9050`)
   - Attempt background Tor launch if unavailable
   - Verify Tor circuit before routed requests
+- Managed Tor runtime:
+  - Uses app-managed Tor at `%LOCALAPPDATA%\StealthOps\tor\current` when available
+  - Can bootstrap managed runtime from bundled Tor files
+  - Optional update checks with modes: `auto`, `force`, `off`
 - Query engine modules:
   - DNS lookup
   - MX lookup
@@ -26,16 +30,26 @@ It supports both CLI and web dashboard workflows and defaults to Tor-routed oper
 
 - `main.py`: entrypoint, CLI/web mode switching
 - `tor_engine.py`: Tor discovery, launch, verification, lifecycle
+- `tor_updater.py`: managed runtime bootstrap + update checks
 - `core_ops.py`: DNS/MX/WHOIS/header logic
 - `web_ui.py`: FastAPI app + Tailwind dashboard
 - `requirements.txt`: runtime dependencies
+
+## Tor Runtime Selection Order
+
+1. `TOR_PATH` override (if set and valid)
+2. Managed Tor runtime (`%LOCALAPPDATA%\StealthOps\tor\current`)
+3. Bundled Tor (copied into managed runtime on first use)
+4. System Tor in PATH/common install locations
+
+Use `--prefer-system-tor` to prioritize system Tor over managed runtime.
 
 ## Requirements
 
 - Python 3.10+
 - Tor executable available by one of:
+  - Bundled with app (recommended for standalone builds)
   - In `PATH` as `tor`/`tor.exe`
-  - At `./tor/tor.exe` or `./bin/tor.exe`
   - Via environment variable `TOR_PATH`
 
 ## Install
@@ -68,21 +82,53 @@ Force strict privacy behavior:
 python main.py --query example.com --block-non-tor
 ```
 
-Custom web bind:
+Tor update controls:
 
 ```powershell
-python main.py --host 127.0.0.1 --port 5000
+python main.py --query example.com --tor-update auto
+python main.py --query example.com --tor-update force
+python main.py --query example.com --tor-update off
 ```
+
+Provide update manifest URL:
+
+```powershell
+python main.py --query example.com --tor-update-manifest https://example.com/tor-manifest.json
+```
+
+Prefer system Tor:
+
+```powershell
+python main.py --query example.com --prefer-system-tor
+```
+
+## Update Manifest Format
+
+Expected JSON keys:
+
+```json
+{
+  "version": "14.5.2",
+  "windows_url": "https://example.com/tor-expert-bundle-windows-x86_64-14.5.2.zip",
+  "sha256": "<sha256-lowercase-hex>"
+}
+```
+
+- `sha256` is required and enforced before activation.
+- In `auto` mode, update checks are TTL-based (default 24 hours).
 
 ## PyInstaller (single EXE)
 
-Build a standalone executable:
+Build a standalone executable and bundle Tor folder contents:
 
 ```powershell
-pyinstaller --onefile --name StealthOps main.py
+pyinstaller --onefile --name StealthOps --add-data "vendor\tor;tor" main.py
 ```
 
-If bundling a Tor Expert Bundle with your app, ship the Tor binary in a known relative path (`.\tor\tor.exe` or `.\bin\tor.exe`) or set `TOR_PATH` at runtime.
+Notes:
+
+- Bundle the Tor directory, not only `tor.exe`, so companion files remain available.
+- On first run, bundled files are copied to managed runtime and launched from there.
 
 ## Privacy Notes
 

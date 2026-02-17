@@ -1,0 +1,5 @@
+{
+  "version": "14.5.2",
+  "windows_url": "https://your-download-host.example.com/tor/tor-expert-bundle-windows-x86_64-14.5.2.zip",
+  "sha256": "replace-with-lowercase-sha256-of-the-archive"
+}

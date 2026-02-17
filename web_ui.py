@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse
 
 from core_ops import QueryConfig, StealthQueryEngine
@@ -12,10 +12,18 @@ from tor_engine import TorEngine
 TAILWIND_CDN = "https://cdn.tailwindcss.com"
 
 
-def build_app() -> FastAPI:
+def build_app(
+    tor_update_mode: str = "auto",
+    tor_update_manifest: str | None = None,
+    prefer_system_tor: bool = False,
+) -> FastAPI:
     app = FastAPI(title="StealthOps")
 
-    tor_engine = TorEngine()
+    tor_engine = TorEngine(
+        tor_update_mode=tor_update_mode,
+        tor_update_manifest=tor_update_manifest,
+        prefer_system_tor=prefer_system_tor,
+    )
     tor_ok = tor_engine.ensure_tor()
     query_engine = StealthQueryEngine(tor_engine, QueryConfig(block_non_tor=False))
 
@@ -28,6 +36,11 @@ def build_app() -> FastAPI:
         shield_class = "bg-emerald-600" if tor_ok else "bg-red-600"
         shield_text = "TOR ROUTED" if tor_ok else "STANDARD ROUTE"
         warning = "" if tor_ok else f"<p class='text-red-400 text-sm mt-2'>Warning: {tor_engine.last_error or 'Tor unavailable'}.</p>"
+        runtime_note = (
+            f"<p class='text-slate-300 text-xs mt-2'>Runtime: {tor_engine.last_update_message}</p>"
+            if tor_engine.last_update_message
+            else ""
+        )
         checked = "checked" if block_non_tor else ""
 
         result_html = ""
@@ -52,11 +65,12 @@ def build_app() -> FastAPI:
     <header class='flex items-center justify-between mb-8'>
       <h1 class='text-3xl font-bold tracking-tight'>StealthOps</h1>
       <div class='px-4 py-2 rounded-full {shield_class} text-white text-sm font-semibold'>
-        ?? {shield_text}
+        Privacy Shield: {shield_text}
       </div>
     </header>
 
     {warning}
+    {runtime_note}
 
     <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl'>
       <form method='post' action='/query' class='space-y-4'>
