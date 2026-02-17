@@ -245,6 +245,7 @@ class TorEngine:
                     messages.append("managed tor bootstrapped from bundled runtime")
             else:
                 messages.append("no bundled tor runtime found")
+                messages.append("provide bundled tor files, set TOR_PATH, or configure --tor-update-manifest")
 
         mode = "force" if force_update else self.tor_update_mode
         update_result = self.updater.maybe_update(mode=mode)

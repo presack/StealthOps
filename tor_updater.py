@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -129,17 +130,33 @@ class TorUpdater:
         return candidates[0] if candidates else None
 
     def _fetch_manifest(self) -> dict[str, Any]:
-        if not self.manifest_url:
-            raise RuntimeError("no update manifest configured")
+        manifest_source = self.manifest_url
+        if not manifest_source:
+            candidates = [Path.cwd() / "tor-manifest.json"]
+            if getattr(sys, "frozen", False):
+                candidates.append(Path(sys.executable).resolve().parent / "tor-manifest.json")
 
-        response = requests.get(self.manifest_url, timeout=20)
-        response.raise_for_status()
-        manifest = response.json()
+            for candidate in candidates:
+                if candidate.exists():
+                    manifest_source = str(candidate)
+                    break
+
+        if not manifest_source:
+            raise RuntimeError("no update manifest configured (set --tor-update-manifest or provide tor-manifest.json)")
+
+        if manifest_source.startswith(("http://", "https://")):
+            response = requests.get(manifest_source, timeout=20)
+            response.raise_for_status()
+            manifest = response.json()
+        else:
+            manifest = json.loads(Path(manifest_source).read_text(encoding="utf-8"))
 
         required = ["version", "windows_url", "sha256"]
         missing = [key for key in required if key not in manifest]
         if missing:
             raise RuntimeError(f"manifest missing keys: {', '.join(missing)}")
+        if "example.com" in str(manifest.get("windows_url", "")):
+            raise RuntimeError("manifest appears to be a template; replace windows_url/sha256 with real values")
 
         return manifest
 

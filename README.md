@@ -76,11 +76,18 @@ Web controls:
 - `Run Fast Query (Public)`: bypasses Tor for speed.
 - `Block Non-Tor Traffic`: fail closed when Tor mode is selected and Tor is unavailable.
 - `Install / Update Managed Tor`: appears when Tor is not verified and triggers managed runtime bootstrap/update.
+- `Update Manifest URL`: optional field in Tor Setup panel for runtime updates when no bundled runtime is present.
 
 ### CLI mode
 
 ```powershell
 python main.py --query example.com
+```
+
+Default CLI output is formatted for readability. Use raw JSON when needed:
+
+```powershell
+python main.py --query example.com --json
 ```
 
 Force strict privacy behavior:
