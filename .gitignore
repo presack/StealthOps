@@ -8,3 +8,6 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .tor_data/
+dist/
+build/
+*.spec

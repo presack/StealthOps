@@ -350,7 +350,7 @@ class StealthQueryEngine:
 
         proxies = self._proxies()
         result: dict[str, Any] = {"ip": ip_value}
-        if not proxies:
+        if not proxies and self.config.route_mode != "public":
             result["network_whois_warning"] = "non-tor fallback used"
 
         urls = [

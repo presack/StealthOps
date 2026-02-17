@@ -201,11 +201,11 @@ def build_app(
   <h3 class='font-semibold mb-2' title='{whois_cmd}'>Domain Whois summary</h3>
   <table class='text-sm w-full'><tbody>{render_kv_rows(whois_summary)}</tbody></table>
 </section>
-{"<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Domain Whois record</h3><pre class='bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-xs whitespace-pre-wrap'>" + html.escape(domain_whois_record) + "</pre></section>" if domain_whois_record else ""}
+{"<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Domain Whois record</h3><div class='text-sm leading-6 whitespace-pre-wrap break-words text-slate-100'>" + html.escape(domain_whois_record) + "</div></section>" if domain_whois_record else ""}
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2'>Network Whois record</h3>
   {"<p class='text-amber-300 text-xs mb-2'>" + html.escape(network_notice) + "</p>" if network_notice else ""}
-  <pre class='bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-xs whitespace-pre-wrap'>{html.escape(network_whois_record or "No network whois record available.")}</pre>
+  <div class='text-sm leading-6 whitespace-pre-wrap break-words text-slate-100'>{html.escape(network_whois_record or "No network whois record available.")}</div>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2'>DNS records</h3>
