@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import sys
 from typing import Callable
@@ -88,6 +89,11 @@ def parse_args() -> argparse.Namespace:
         "--json",
         action="store_true",
         help="Emit raw JSON results in CLI mode",
+    )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable ANSI colors in console mode",
     )
     parser.add_argument("--host", default="127.0.0.1", help="Web server bind host")
     parser.add_argument("--port", type=int, default=5000, help="Web server bind port")
@@ -251,6 +257,73 @@ def _execute_query(query_engine: StealthQueryEngine, target: str, emit_json: boo
         return 1
 
 
+def _truncate_text(value: str, max_len: int = 64) -> str:
+    text = value.strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3].rstrip() + "..."
+
+
+def _color_enabled(args: argparse.Namespace) -> bool:
+    if args.no_color:
+        return False
+    if os.environ.get("NO_COLOR"):
+        return False
+    return _interactive_stdio()
+
+
+def _c(enabled: bool, text: str, code: str) -> str:
+    if not enabled:
+        return text
+    return f"\x1b[{code}m{text}\x1b[0m"
+
+
+def _render_console_banner(
+    query_engine: StealthQueryEngine,
+    tor_engine: TorEngine,
+    tor_ok: bool,
+    emit_json: bool,
+    use_color: bool,
+) -> str:
+    route = "Stealth" if query_engine.config.route_mode == "stealth" else "Public"
+    if query_engine.config.route_mode == "public":
+        tor_status = "Bypassed (Public Mode)"
+    elif tor_ok:
+        tor_status = f"Socks Proxy {tor_engine.socks_host}:{tor_engine.socks_port}"
+    else:
+        err = _truncate_text(tor_engine.last_error or "Unavailable")
+        tor_status = f"Unavailable ({err})"
+
+    block_mode = "On" if query_engine.config.block_non_tor else "Off"
+    output_mode = "JSON" if emit_json else "Pretty"
+    route_disp = _c(use_color, route, "96" if route == "Stealth" else "93")
+    tor_disp = _c(use_color, tor_status, "92" if tor_ok and query_engine.config.route_mode == "stealth" else "93")
+    block_disp = _c(use_color, block_mode, "91" if block_mode == "On" else "90")
+    output_disp = _c(use_color, output_mode, "95" if output_mode == "JSON" else "97")
+    title = _c(use_color, "[ PRIVACY-CENTRIC NETWORK INTELLIGENCE ]", "92")
+    rule = _c(use_color, "  _____________________________________________________________", "90")
+    art_lines = [
+        "  ____  _             _ _   _      ___               ",
+        " / ___|| |_ ___  __ _| | |_| |__  / _ \\ _ __  ___   ",
+        " \\___ \\| __/ _ \\/ _` | | __| '_ \\| | | | '_ \\/ __|  ",
+        "  ___) | ||  __/ (_| | | |_| | | | |_| | |_) \\__ \\  ",
+        " |____/ \\__\\___|\\__,_|_|\\__|_| |_|\\___/| .__/|___/  ",
+        "                                        |_|          ",
+    ]
+    art = "\n".join(_c(use_color, line, "36") for line in art_lines)
+
+    return (
+        f"{art}\n"
+        f"   {title}\n"
+        "\n"
+        f"  > Route Mode ...................... [{route_disp}]\n"
+        f"  > TOR Routing ..................... [{tor_disp}]\n"
+        f"  > Block Non-TOR ................... [{block_disp}]\n"
+        f"  > Output Mode ..................... [{output_disp}]\n"
+        f"{rule}"
+    )
+
+
 def run_cli(args: argparse.Namespace) -> int:
     if not args.query:
         return 1
@@ -290,6 +363,7 @@ def run_console(args: argparse.Namespace) -> int:
     block_non_tor = bool(args.block_non_tor)
 
     tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
+    use_color = _color_enabled(args)
     if args.install_tor:
         print("[privacy] starting managed Tor install/update")
         message = tor_engine.manage_tor_runtime(force_update=True)
@@ -304,8 +378,8 @@ def run_console(args: argparse.Namespace) -> int:
         QueryConfig(block_non_tor=block_non_tor, route_mode=route_mode),
     )
 
-    print("StealthOps console. Type 'help' for commands.")
-    print(f"[privacy] route_mode={route_mode} tor_verified={tor_ok}")
+    print(_render_console_banner(query_engine, tor_engine, tor_ok, emit_json, use_color))
+    print("Type 'help' for commands.")
 
     while True:
         try:
@@ -335,9 +409,13 @@ def run_console(args: argparse.Namespace) -> int:
             print("  mode <stealth|public>  set routing mode")
             print("  tor install            install/update managed Tor runtime")
             print("  tor status             show Tor status")
+            print("  status                 print console status banner")
             print("  block <on|off>         set block non-tor mode")
             print("  json <on|off>          toggle JSON output")
             print("  exit                   quit console")
+            continue
+        if cmd == "status":
+            print(_render_console_banner(query_engine, tor_engine, tor_ok, emit_json, use_color))
             continue
         if cmd == "query":
             if len(parts) < 2:

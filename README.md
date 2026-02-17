@@ -143,6 +143,12 @@ Start console mode with persistent route preference:
 python main.py --console
 ```
 
+Disable console colors when needed:
+
+```powershell
+python main.py --console --no-color
+```
+
 Start console in public route mode:
 
 ```powershell
