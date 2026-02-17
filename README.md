@@ -17,10 +17,15 @@ It supports both CLI and web dashboard workflows and defaults to Tor-routed oper
   - Can bootstrap managed runtime from bundled Tor files
   - Optional update checks with modes: `auto`, `force`, `off`
 - Query engine modules:
+  - Address lookup (canonical name, aliases, addresses)
   - DNS lookup (A, AAAA, NS, TXT, CNAME, CAA, SOA)
   - MX lookup
   - WHOIS lookup
+  - Network WHOIS lookup (RDAP for resolved IPs)
   - HTTP header inspection
+  - Raw record views:
+    - Domain WHOIS record transcript (when available from provider/library)
+    - Network WHOIS RDAP payload
 - Privacy UI indicator:
   - Green shield: Tor verified
   - Red shield: Tor unavailable, standard route in use

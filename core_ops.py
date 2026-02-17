@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import ipaddress
+import socket
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import dns.resolver
 import requests
@@ -139,15 +143,197 @@ class StealthQueryEngine:
             return {"domain": domain, "whois_error": str(exc)}
 
         normalized = {}
+        raw_chunks: list[str] = []
         for key, value in data.items():
+            if key == "raw":
+                if isinstance(value, list):
+                    raw_chunks.extend(str(v) for v in value if v)
+                elif value:
+                    raw_chunks.append(str(value))
+                continue
             if isinstance(value, list):
                 normalized[key] = [str(v) for v in value]
             elif value is None:
                 normalized[key] = None
             else:
                 normalized[key] = str(value)
+        if "status" in normalized:
+            statuses = normalized["status"]
+            if not isinstance(statuses, list):
+                statuses = [str(statuses)]
+            compact = []
+            for item in statuses:
+                # Keep EPP status token and drop trailing help URL noise.
+                token = str(item).strip().split()[0] if item else ""
+                if token:
+                    compact.append(token)
+            if compact:
+                normalized["status"] = sorted(set(compact))
+        if raw_chunks:
+            normalized["raw_whois"] = "\n\n".join(raw_chunks)
         normalized["domain"] = domain
         return normalized
+
+    def address_lookup(self, domain: str, dns_data: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "query": domain,
+            "canonical_name": "",
+            "aliases": [],
+            "addresses": [],
+        }
+        try:
+            canonical, aliases, addresses = socket.gethostbyname_ex(domain)
+            result["canonical_name"] = canonical.rstrip(".")
+            result["aliases"] = [str(v).rstrip(".") for v in aliases if v]
+            result["addresses"] = [str(v) for v in addresses if v]
+        except Exception as exc:
+            result["address_lookup_error"] = str(exc)
+
+        # Merge in DNS answers to avoid empty or incomplete address sets.
+        merged = []
+        for value in result.get("addresses", []):
+            if value not in merged:
+                merged.append(value)
+        for value in dns_data.get("a", []):
+            if value not in merged:
+                merged.append(value)
+        for value in dns_data.get("aaaa", []):
+            if value not in merged:
+                merged.append(value)
+        result["addresses"] = merged
+
+        if not result.get("canonical_name"):
+            cname = dns_data.get("cname", [])
+            if cname:
+                result["canonical_name"] = str(cname[0]).rstrip(".")
+            else:
+                result["canonical_name"] = domain
+
+        return result
+
+    @staticmethod
+    def _first_ip(dns_data: dict[str, Any]) -> str | None:
+        for key in ("a", "aaaa"):
+            values = dns_data.get(key, [])
+            for value in values:
+                try:
+                    ipaddress.ip_address(str(value))
+                    return str(value)
+                except ValueError:
+                    continue
+        return None
+
+    @staticmethod
+    def _extract_vcard_field(entity: dict[str, Any], field_name: str) -> str | None:
+        vcard = entity.get("vcardArray")
+        if not isinstance(vcard, list) or len(vcard) < 2 or not isinstance(vcard[1], list):
+            return None
+        for item in vcard[1]:
+            if isinstance(item, list) and len(item) >= 4 and str(item[0]).lower() == field_name:
+                value = item[3]
+                if isinstance(value, list):
+                    return " ".join(str(v) for v in value if v)
+                return str(value)
+        return None
+
+    def network_whois_lookup(self, dns_data: dict[str, Any]) -> dict[str, Any]:
+        ip_value = self._first_ip(dns_data)
+        if not ip_value:
+            return {"network_whois_error": "no A/AAAA record available for network whois"}
+
+        proxies = self._proxies()
+        result: dict[str, Any] = {"ip": ip_value}
+        if not proxies:
+            result["network_whois_warning"] = "non-tor fallback used"
+
+        urls = [
+            f"https://rdap.org/ip/{ip_value}",
+            f"https://rdap.arin.net/registry/ip/{ip_value}",
+        ]
+        last_error: str | None = None
+        payload: dict[str, Any] | None = None
+        used_url: str | None = None
+
+        for url in urls:
+            try:
+                response = requests.get(
+                    url,
+                    headers={"accept": "application/rdap+json, application/json"},
+                    proxies=proxies,
+                    timeout=15,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                used_url = url
+                break
+            except Exception as exc:
+                last_error = str(exc)
+
+        if payload is None:
+            result["network_whois_error"] = last_error or "network whois lookup failed"
+            return result
+
+        result["rdap_url"] = used_url
+        result["raw_rdap"] = json.dumps(payload, indent=2, ensure_ascii=True)
+        for src_key, dst_key in (
+            ("name", "net_name"),
+            ("handle", "net_handle"),
+            ("startAddress", "start_address"),
+            ("endAddress", "end_address"),
+            ("ipVersion", "ip_version"),
+            ("type", "net_type"),
+            ("country", "country"),
+            ("parentHandle", "parent_handle"),
+        ):
+            value = payload.get(src_key)
+            if value:
+                result[dst_key] = str(value)
+
+        cidr_values = []
+        for cidr_item in payload.get("cidr0_cidrs", []):
+            if isinstance(cidr_item, dict):
+                v4pref = cidr_item.get("v4prefix")
+                v4len = cidr_item.get("length")
+                v6pref = cidr_item.get("v6prefix")
+                v6len = cidr_item.get("length")
+                if v4pref and v4len is not None:
+                    cidr_values.append(f"{v4pref}/{v4len}")
+                elif v6pref and v6len is not None:
+                    cidr_values.append(f"{v6pref}/{v6len}")
+        if cidr_values:
+            result["cidr"] = ", ".join(cidr_values)
+
+        entities = payload.get("entities", [])
+        if isinstance(entities, list):
+            chosen_org = None
+            abuse_email = None
+            abuse_phone = None
+            for entity in entities:
+                if not isinstance(entity, dict):
+                    continue
+                roles = [str(r).lower() for r in entity.get("roles", [])]
+                org_name = (
+                    self._extract_vcard_field(entity, "fn")
+                    or self._extract_vcard_field(entity, "org")
+                    or entity.get("handle")
+                )
+                email = self._extract_vcard_field(entity, "email")
+                phone = self._extract_vcard_field(entity, "tel")
+                if not chosen_org and org_name:
+                    chosen_org = str(org_name)
+                if "abuse" in roles:
+                    if email:
+                        abuse_email = str(email)
+                    if phone:
+                        abuse_phone = str(phone)
+            if chosen_org:
+                result["organization"] = chosen_org
+            if abuse_email:
+                result["abuse_email"] = abuse_email
+            if abuse_phone:
+                result["abuse_phone"] = abuse_phone
+
+        return result
 
     def header_inspect(self, url: str) -> dict[str, Any]:
         target = url if url.startswith(("http://", "https://")) else f"https://{url}"
@@ -171,9 +357,25 @@ class StealthQueryEngine:
             return {"url": target, "header_error": str(exc), "tor_routed": bool(proxies)}
 
     def run_all(self, target: str) -> dict[str, Any]:
+        lookup_target = self._normalize_lookup_target(target)
+        dns_data = self.dns_lookup(lookup_target)
+        address_data = self.address_lookup(lookup_target, dns_data)
         return {
-            "dns": self.dns_lookup(target),
-            "mx": self.mx_lookup(target),
-            "whois": self.whois_lookup(target),
+            "address": address_data,
+            "dns": dns_data,
+            "mx": self.mx_lookup(lookup_target),
+            "whois": self.whois_lookup(lookup_target),
+            "network_whois": self.network_whois_lookup(dns_data),
             "headers": self.header_inspect(target),
         }
+    @staticmethod
+    def _normalize_lookup_target(target: str) -> str:
+        value = target.strip()
+        if not value:
+            return value
+        if value.startswith(("http://", "https://")):
+            parsed = urlparse(value)
+            return parsed.hostname or value
+        if "/" in value:
+            return value.split("/", 1)[0]
+        return value

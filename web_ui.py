@@ -15,6 +15,42 @@ from tor_engine import TorEngine
 TAILWIND_CDN = "https://cdn.tailwindcss.com"
 
 
+def human_label(key: str) -> str:
+    labels = {
+        "domain_name": "Domain Name",
+        "creation_date": "Creation Date",
+        "expiration_date": "Expiration Date",
+        "updated_date": "Updated Date",
+        "whois_server": "WHOIS Server",
+        "name_servers": "Name Servers",
+        "canonical_name": "Canonical Name",
+        "aliases": "Aliases",
+        "addresses": "Addresses",
+        "address_lookup_error": "Address Lookup Error",
+        "registrar_iana_id": "Registrar IANA ID",
+        "status": "Domain Status",
+        "whois_error": "WHOIS Error",
+        "network_whois_error": "Network WHOIS Error",
+        "network_whois_warning": "Network WHOIS Warning",
+        "net_name": "Net Name",
+        "net_handle": "Net Handle",
+        "net_type": "Net Type",
+        "parent_handle": "Parent Handle",
+        "ip_version": "IP Version",
+        "start_address": "Start Address",
+        "end_address": "End Address",
+        "rdap_url": "RDAP URL",
+        "abuse_email": "Abuse Email",
+        "abuse_phone": "Abuse Phone",
+        "tor_routed": "Tor Routed",
+        "status_code": "Status Code",
+        "final_url": "Final URL",
+    }
+    if key in labels:
+        return labels[key]
+    return key.replace("_", " ").strip().title()
+
+
 def build_app(
     tor_update_mode: str = "auto",
     tor_update_manifest: str | None = None,
@@ -45,15 +81,17 @@ def build_app(
             else:
                 value_str = str(value) if value not in (None, "") else "-"
             rows.append(
-                f"<tr><td class='py-1 pr-3 text-slate-400'>{html.escape(str(key))}</td>"
-                f"<td class='py-1 text-slate-100'>{html.escape(value_str)}</td></tr>"
+                f"<tr><td class='py-1 pr-3 text-slate-400'>{html.escape(human_label(str(key)))}</td>"
+                f"<td class='py-1 text-slate-100 break-all'>{html.escape(value_str)}</td></tr>"
             )
         return "".join(rows)
 
     def render_results(results: dict, show_json: bool) -> str:
+        address_data = results.get("address", {})
         dns_data = results.get("dns", {})
         mx_data = results.get("mx", {})
         whois_data = results.get("whois", {})
+        network_whois_data = results.get("network_whois", {})
         header_data = results.get("headers", {})
 
         whois_summary = {
@@ -68,6 +106,39 @@ def build_app(
             ]
             if key in whois_data
         }
+        address_summary = {
+            key: address_data.get(key)
+            for key in [
+                "query",
+                "canonical_name",
+                "aliases",
+                "addresses",
+                "address_lookup_error",
+            ]
+            if key in address_data
+        }
+        network_whois_summary = {
+            key: network_whois_data.get(key)
+            for key in [
+                "ip",
+                "organization",
+                "net_name",
+                "cidr",
+                "start_address",
+                "end_address",
+                "country",
+                "ip_version",
+                "net_type",
+                "abuse_email",
+                "abuse_phone",
+                "rdap_url",
+                "network_whois_warning",
+                "network_whois_error",
+            ]
+            if key in network_whois_data
+        }
+        domain_raw_whois = str(whois_data.get("raw_whois", "")).strip()
+        network_raw_rdap = str(network_whois_data.get("raw_rdap", "")).strip()
 
         mx_rows = ""
         for item in mx_data.get("mx", []):
@@ -115,9 +186,14 @@ def build_app(
 
         return f"""
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-6'>
+  <h3 class='font-semibold mb-2'>Address Lookup</h3>
+  <table class='text-sm w-full'><tbody>{render_kv_rows(address_summary)}</tbody></table>
+</section>
+<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2' title='{whois_cmd}'>WHOIS</h3>
   <table class='text-sm w-full'><tbody>{render_kv_rows(whois_summary)}</tbody></table>
 </section>
+{"<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Domain WHOIS Record</h3><pre class='bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-xs whitespace-pre-wrap'>" + html.escape(domain_raw_whois) + "</pre></section>" if domain_raw_whois else ""}
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2' title='{dns_a_cmd}'>DNS Summary</h3>
   <p class='text-sm'><span class='text-slate-400'>Domain:</span> {domain}</p>
@@ -131,6 +207,11 @@ def build_app(
   </table>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
+  <h3 class='font-semibold mb-2'>Network WHOIS</h3>
+  <table class='text-sm w-full'><tbody>{render_kv_rows(network_whois_summary)}</tbody></table>
+</section>
+{"<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Network WHOIS Record</h3><pre class='bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto text-xs whitespace-pre-wrap'>" + html.escape(network_raw_rdap) + "</pre></section>" if network_raw_rdap else ""}
+<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2' title='{dns_ns_cmd}'>NS Records</h3>
   <ul class='list-disc pl-5 text-sm space-y-1'>{ns_rows}</ul>
 </section>
@@ -142,10 +223,10 @@ def build_app(
   <h3 class='font-semibold mb-2' title='{http_cmd}'>HTTP Headers</h3>
   <table class='text-sm w-full'>
     <tbody>
-      <tr><td class='py-1 pr-3 text-slate-400'>url</td><td class='py-1 break-all'>{html.escape(str(header_data.get('url', '-')))}</td></tr>
-      <tr><td class='py-1 pr-3 text-slate-400'>status_code</td><td class='py-1'>{html.escape(str(header_data.get('status_code', '-')))}</td></tr>
-      <tr><td class='py-1 pr-3 text-slate-400'>final_url</td><td class='py-1 break-all'>{html.escape(str(header_data.get('final_url', '-')))}</td></tr>
-      <tr><td class='py-1 pr-3 text-slate-400'>tor_routed</td><td class='py-1'>{html.escape(str(header_data.get('tor_routed', '-')))}</td></tr>
+      <tr><td class='py-1 pr-3 text-slate-400'>URL</td><td class='py-1 break-all'>{html.escape(str(header_data.get('url', '-')))}</td></tr>
+      <tr><td class='py-1 pr-3 text-slate-400'>Status Code</td><td class='py-1'>{html.escape(str(header_data.get('status_code', '-')))}</td></tr>
+      <tr><td class='py-1 pr-3 text-slate-400'>Final URL</td><td class='py-1 break-all'>{html.escape(str(header_data.get('final_url', '-')))}</td></tr>
+      <tr><td class='py-1 pr-3 text-slate-400'>Tor Routed</td><td class='py-1'>{html.escape(str(header_data.get('tor_routed', '-')))}</td></tr>
     </tbody>
   </table>
   <table class='text-sm w-full mt-3'>

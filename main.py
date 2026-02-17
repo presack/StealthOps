@@ -13,6 +13,37 @@ from tor_engine import TorEngine
 from web_ui import build_app
 
 
+def human_label(key: str) -> str:
+    labels = {
+        "domain_name": "Domain Name",
+        "creation_date": "Creation Date",
+        "expiration_date": "Expiration Date",
+        "updated_date": "Updated Date",
+        "whois_server": "WHOIS Server",
+        "canonical_name": "Canonical Name",
+        "aliases": "Aliases",
+        "addresses": "Addresses",
+        "address_lookup_error": "Address Lookup Error",
+        "status_code": "Status Code",
+        "final_url": "Final URL",
+        "tor_routed": "Tor Routed",
+        "whois_error": "WHOIS Error",
+        "network_whois_error": "Network WHOIS Error",
+        "network_whois_warning": "Network WHOIS Warning",
+        "net_name": "Net Name",
+        "net_type": "Net Type",
+        "start_address": "Start Address",
+        "end_address": "End Address",
+        "ip_version": "IP Version",
+        "abuse_email": "Abuse Email",
+        "abuse_phone": "Abuse Phone",
+        "rdap_url": "RDAP URL",
+    }
+    if key in labels:
+        return labels[key]
+    return key.replace("_", " ").strip().title()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="StealthOps - privacy-hardened reconnaissance utility")
     parser.add_argument("--query", help="Domain/URL target for CLI mode")
@@ -56,19 +87,35 @@ def create_tor_engine(args: argparse.Namespace, status_callback: Callable[[str],
 
 
 def format_cli_report(result: dict) -> str:
+    address_data = result.get("address", {})
     dns_data = result.get("dns", {})
     mx_data = result.get("mx", {})
     whois_data = result.get("whois", {})
+    network_whois_data = result.get("network_whois", {})
     headers_data = result.get("headers", {})
 
     lines: list[str] = []
+    lines.append("=== ADDRESS LOOKUP ===  [source: resolver + DNS records]")
+    for field in ["query", "canonical_name", "aliases", "addresses", "address_lookup_error"]:
+        if field in address_data:
+            value = address_data[field]
+            if isinstance(value, list):
+                value = ", ".join(str(v) for v in value) if value else "-"
+            lines.append(f"{human_label(field)}: {value}")
+
+    lines.append("")
     lines.append("=== WHOIS ===  [source: whois <domain>]")
     for field in ["domain_name", "registrar", "creation_date", "expiration_date", "status", "whois_error"]:
         if field in whois_data:
             value = whois_data[field]
             if isinstance(value, list):
                 value = ", ".join(str(v) for v in value) if value else "-"
-            lines.append(f"{field}: {value}")
+            lines.append(f"{human_label(field)}: {value}")
+    raw_whois = str(whois_data.get("raw_whois", "")).strip()
+    if raw_whois:
+        lines.append("")
+        lines.append("=== DOMAIN WHOIS RECORD ===")
+        lines.append(raw_whois)
 
     lines.append("")
     lines.append("=== DNS SUMMARY ===  [source: dns query A/AAAA]")
@@ -91,6 +138,35 @@ def format_cli_report(result: dict) -> str:
         lines.append(f"mx_error: {mx_data.get('mx_error')}")
 
     lines.append("")
+    lines.append("=== NETWORK WHOIS ===  [source: RDAP]")
+    for field in [
+        "ip",
+        "organization",
+        "net_name",
+        "cidr",
+        "start_address",
+        "end_address",
+        "country",
+        "ip_version",
+        "net_type",
+        "abuse_email",
+        "abuse_phone",
+        "rdap_url",
+        "network_whois_warning",
+        "network_whois_error",
+    ]:
+        if field in network_whois_data:
+            value = network_whois_data[field]
+            if isinstance(value, list):
+                value = ", ".join(str(v) for v in value) if value else "-"
+            lines.append(f"{human_label(field)}: {value}")
+    raw_rdap = str(network_whois_data.get("raw_rdap", "")).strip()
+    if raw_rdap:
+        lines.append("")
+        lines.append("=== NETWORK WHOIS RECORD ===")
+        lines.append(raw_rdap)
+
+    lines.append("")
     lines.append("=== NS RECORDS ===  [source: dns query NS]")
     ns_records = dns_data.get("ns", [])
     if ns_records:
@@ -110,10 +186,10 @@ def format_cli_report(result: dict) -> str:
 
     lines.append("")
     lines.append("=== HTTP HEADERS ===  [source: GET + response headers]")
-    lines.append(f"url: {headers_data.get('url', '-')}")
-    lines.append(f"status_code: {headers_data.get('status_code', '-')}")
-    lines.append(f"final_url: {headers_data.get('final_url', '-')}")
-    lines.append(f"tor_routed: {headers_data.get('tor_routed', '-')}")
+    lines.append(f"URL: {headers_data.get('url', '-')}")
+    lines.append(f"Status Code: {headers_data.get('status_code', '-')}")
+    lines.append(f"Final URL: {headers_data.get('final_url', '-')}")
+    lines.append(f"Tor Routed: {headers_data.get('tor_routed', '-')}")
     if "header_error" in headers_data:
         lines.append(f"header_error: {headers_data.get('header_error')}")
     else:
