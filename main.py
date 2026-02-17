@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from typing import Callable
 
 import uvicorn
 
@@ -45,11 +46,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def create_tor_engine(args: argparse.Namespace) -> TorEngine:
+def create_tor_engine(args: argparse.Namespace, status_callback: Callable[[str], None] | None = None) -> TorEngine:
     return TorEngine(
         tor_update_mode=args.tor_update,
         tor_update_manifest=args.tor_update_manifest,
         prefer_system_tor=args.prefer_system_tor,
+        status_callback=status_callback,
     )
 
 
@@ -138,7 +140,7 @@ def run_cli(args: argparse.Namespace) -> int:
     if not args.query:
         return 1
 
-    tor_engine = create_tor_engine(args)
+    tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
     tor_ok = tor_engine.ensure_tor()
 
     query_engine = StealthQueryEngine(tor_engine, QueryConfig(block_non_tor=args.block_non_tor))

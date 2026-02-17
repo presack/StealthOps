@@ -190,13 +190,14 @@ def build_app(
     <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
       <h2 class='text-lg font-semibold'>Tor Setup</h2>
       <p class='text-sm text-slate-300 mt-1'>No verified Tor route detected. You can bootstrap or update managed Tor runtime now.</p>
+      <p class='text-xs text-slate-400 mt-1'>Download can take 1-2 minutes depending on connection speed.</p>
       <p class='text-xs text-slate-400 mt-2 break-all'>{html.escape(update_source)}</p>
-      <form method='post' action='/tor/manage' class='mt-3 space-y-3'>
+      <form method='post' action='/tor/manage' class='mt-3 space-y-3' onsubmit="const btn=this.querySelector('button[type=submit]'); if (btn) {{ btn.disabled=true; btn.textContent='Downloading Tor...'; btn.classList.add('opacity-70','cursor-not-allowed'); }}">
         <label class='flex items-center gap-2 text-sm'>
           <input type='checkbox' name='confirm_download' />
           Confirm download from the source above
         </label>
-        <button name='force_update' value='1' class='bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-lg font-semibold'>Install / Update Managed Tor</button>
+        <button type='submit' name='force_update' value='1' class='bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-lg font-semibold'>Install / Update Managed Tor</button>
       </form>
     </section>
 """

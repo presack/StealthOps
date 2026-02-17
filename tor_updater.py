@@ -15,7 +15,7 @@ import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -39,12 +39,22 @@ class TorUpdater:
         app_name: str = "StealthOps",
         manifest_url: str | None = None,
         ttl_hours: int = 24,
+        status_callback: Callable[[str], None] | None = None,
     ) -> None:
         self.manifest_url = manifest_url or os.environ.get("STEALTHOPS_TOR_MANIFEST")
         self.ttl_hours = ttl_hours
+        self.status_callback = status_callback
         self.managed_root = self._default_managed_root(app_name)
         self.current_dir = self.managed_root / "current"
         self.state_file = self.managed_root / "update_state.json"
+
+    def _emit_status(self, message: str) -> None:
+        if not self.status_callback:
+            return
+        try:
+            self.status_callback(message)
+        except Exception:
+            pass
 
     @staticmethod
     def _default_managed_root(app_name: str) -> Path:
@@ -221,13 +231,38 @@ class TorUpdater:
                 digest.update(chunk)
         return digest.hexdigest().lower()
 
-    def _download(self, url: str, destination: Path) -> None:
+    @staticmethod
+    def _format_mb(byte_count: int) -> str:
+        return f"{(byte_count / (1024 * 1024)):.1f}"
+
+    def _download(self, url: str, destination: Path) -> tuple[int, int | None]:
+        host = urlparse(url).netloc or "source"
+        self._emit_status(f"downloading tor bundle from {host}")
         with requests.get(url, timeout=60, stream=True) as response:
             response.raise_for_status()
+            total_header = response.headers.get("Content-Length", "").strip()
+            total = int(total_header) if total_header.isdigit() else None
+            downloaded = 0
+            last_percent_reported = -1
+            last_bytes_reported = 0
             with destination.open("wb") as out:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         out.write(chunk)
+                        downloaded += len(chunk)
+                        if total:
+                            percent = int((downloaded * 100) / total)
+                            if percent >= last_percent_reported + 10 or downloaded >= total:
+                                self._emit_status(
+                                    f"downloading tor bundle: {self._format_mb(downloaded)} / {self._format_mb(total)} MB ({percent}%)"
+                                )
+                                last_percent_reported = percent
+                        else:
+                            if downloaded - last_bytes_reported >= 5 * 1024 * 1024:
+                                self._emit_status(f"downloading tor bundle: {self._format_mb(downloaded)} MB")
+                                last_bytes_reported = downloaded
+        self._emit_status(f"download complete: {self._format_mb(downloaded)} MB")
+        return downloaded, total
 
     def _extract_bundle(self, archive_path: Path, target_dir: Path) -> None:
         if target_dir.exists():
@@ -289,7 +324,7 @@ class TorUpdater:
                 archive_name = Path(str(manifest["windows_url"])).name or "tor_bundle.zip"
                 archive_path = temp_dir / archive_name
 
-                self._download(str(manifest["windows_url"]), archive_path)
+                downloaded_bytes, _ = self._download(str(manifest["windows_url"]), archive_path)
 
                 expected = str(manifest["sha256"]).lower().strip()
                 actual = self._sha256_file(archive_path)
@@ -309,7 +344,7 @@ class TorUpdater:
             return TorUpdateResult(
                 checked=True,
                 updated=True,
-                message="tor updated successfully",
+                message=f"tor updated successfully (downloaded {self._format_mb(downloaded_bytes)} MB)",
                 current_version=updated_version,
                 latest_version=latest,
             )

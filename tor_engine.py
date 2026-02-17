@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 from stem.process import launch_tor_with_config
@@ -30,6 +30,7 @@ class TorEngine:
         tor_update_manifest: str | None = None,
         prefer_system_tor: bool = False,
         update_ttl_hours: int = 24,
+        status_callback: Callable[[str], None] | None = None,
     ) -> None:
         self.socks_host = socks_host
         self.socks_port = socks_port
@@ -38,10 +39,24 @@ class TorEngine:
         self.process: Optional[subprocess.Popen] = None
         self.last_error: Optional[str] = None
         self.last_update_message: Optional[str] = None
+        self.status_callback = status_callback
 
         self.tor_update_mode = tor_update_mode
         self.prefer_system_tor = prefer_system_tor
-        self.updater = TorUpdater(manifest_url=tor_update_manifest, ttl_hours=update_ttl_hours)
+        self.updater = TorUpdater(
+            manifest_url=tor_update_manifest,
+            ttl_hours=update_ttl_hours,
+            status_callback=self._on_status,
+        )
+
+    def _on_status(self, message: str) -> None:
+        self.last_update_message = message
+        if not self.status_callback:
+            return
+        try:
+            self.status_callback(message)
+        except Exception:
+            pass
 
     @property
     def proxy_url(self) -> str:
@@ -239,6 +254,7 @@ class TorEngine:
         messages: list[str] = []
 
         managed_tor = self.updater.managed_tor_exe
+        no_bundle_available = False
         if not managed_tor.exists():
             bundled = self._bundled_tor_path()
             if bundled:
@@ -246,14 +262,18 @@ class TorEngine:
                 if installed:
                     messages.append("managed tor bootstrapped from bundled runtime")
             else:
-                messages.append("no bundled tor runtime found")
-                messages.append("provide bundled tor files, set TOR_PATH, or allow official source download")
-                messages.append("updater can also attempt official torproject.org source when no manifest is provided")
+                no_bundle_available = True
 
         mode = "force" if force_update else self.tor_update_mode
         update_result = self.updater.maybe_update(mode=mode)
         if update_result.message:
             messages.append(update_result.message)
+
+        managed_after_update = self.updater.managed_tor_exe.exists()
+        if no_bundle_available and not managed_after_update:
+            messages.append("no bundled tor runtime found")
+            messages.append("provide bundled tor files, set TOR_PATH, or allow official source download")
+            messages.append("updater can also attempt official torproject.org source when no manifest is provided")
 
         tor_ok = self.ensure_tor()
         messages.append("tor verified" if tor_ok else f"tor unavailable: {self.last_error or 'unknown error'}")
