@@ -175,17 +175,19 @@ class TorEngine:
         self.data_dir.mkdir(exist_ok=True)
 
         try:
-            self.process = launch_tor_with_config(
-                config={
+            launch_args = {
+                "config": {
                     "SocksPort": str(self.socks_port),
                     "ControlPort": str(self.control_port),
                     "DataDirectory": str(self.data_dir.resolve()),
                     "CookieAuthentication": "1",
                 },
-                tor_cmd=tor_cmd,
-                take_ownership=True,
-                timeout=timeout,
-            )
+                "tor_cmd": tor_cmd,
+                "take_ownership": True,
+            }
+            if os.name != "nt":
+                launch_args["timeout"] = timeout
+            self.process = launch_tor_with_config(**launch_args)
         except Exception as exc:  # pragma: no cover - depends on runtime tor env
             self.last_error = f"failed launching tor: {exc}"
             return False
