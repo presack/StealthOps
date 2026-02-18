@@ -12,7 +12,7 @@ import threading
 import time
 from typing import Callable
 
-from core_ops import QueryConfig, StealthQueryEngine
+from core_ops import QueryConfig, StealthQueryEngine, internet_available
 from tor_engine import TorEngine
 from web_ui import build_app
 
@@ -289,6 +289,9 @@ def _execute_query(query_engine: StealthQueryEngine, target: str, emit_json: boo
             thread.join(timeout=0.3)
 
     try:
+        if not internet_available(timeout=1.0):
+            print("error: internet connectivity check failed (no network route detected)")
+            return 1
         start = time.monotonic()
         result = run_with_activity("Gathering results", lambda: query_engine.run_all(target))
         elapsed = time.monotonic() - start
@@ -494,14 +497,31 @@ def run_console(args: argparse.Namespace) -> int:
     print("")
     print("Type 'help' for commands.")
     print("")
+    web_server = None
+    web_thread: threading.Thread | None = None
+
+    def shutdown_web_background() -> None:
+        nonlocal web_server, web_thread
+        if not web_server:
+            return
+        try:
+            web_server.should_exit = True
+        except Exception:
+            pass
+        if web_thread and web_thread.is_alive():
+            web_thread.join(timeout=2.0)
+        web_server = None
+        web_thread = None
 
     while True:
         try:
             raw_in = input("stealthops> ")
         except EOFError:
+            shutdown_web_background()
             print("")
             return 0
         except KeyboardInterrupt:
+            shutdown_web_background()
             print("")
             return 0
 
@@ -524,6 +544,7 @@ def run_console(args: argparse.Namespace) -> int:
 
         cmd = parts[0].lower()
         if cmd in {"exit", "quit"}:
+            shutdown_web_background()
             return 0
         if cmd == "help":
             print("Commands:")
@@ -533,7 +554,7 @@ def run_console(args: argparse.Namespace) -> int:
             print("  mode <stealth|public>  set routing mode")
             print("  tor install            install/update managed Tor runtime")
             print("  tor status             show Tor status")
-            print("  web [host] [port]      start web server and exit console")
+            print("  web [host] [port]      start web server in background")
             print("  banner                 print full intro banner")
             print("  status                 print console status banner")
             print("  block <on|off>         set block non-tor mode")
@@ -562,10 +583,16 @@ def run_console(args: argparse.Namespace) -> int:
                 print("usage: web [host] [port]")
                 print("")
                 continue
-            print(f"Starting web server on {host}:{port}")
+            if web_thread and web_thread.is_alive():
+                print("web server already running in background")
+                print("")
+                continue
+            if not internet_available(timeout=1.0):
+                print("[notice] internet connectivity check failed; web UI will start but queries may fail until connectivity returns")
+            print(f"Starting web server in background on {host}:{port}")
             print("")
-            run_web(args, host_override=host, port_override=port)
-            return 0
+            web_server, web_thread = run_web_background(args, host_override=host, port_override=port)
+            continue
         if cmd == "banner":
             print(_render_console_banner(query_engine, tor_engine, tor_ok, emit_json, use_color))
             print("")
@@ -661,7 +688,33 @@ def run_web(args: argparse.Namespace, host_override: str | None = None, port_ove
         tor_update_manifest=args.tor_update_manifest,
         prefer_system_tor=args.prefer_system_tor,
     )
+    if not internet_available(timeout=1.0):
+        print("[notice] internet connectivity check failed; queries will fail until connectivity returns")
     uvicorn.run(app, host=host_override or args.host, port=port_override or args.port)
+
+
+def run_web_background(
+    args: argparse.Namespace,
+    host_override: str | None = None,
+    port_override: int | None = None,
+) -> tuple[object, threading.Thread]:
+    try:
+        import uvicorn
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Web mode requires uvicorn. Rebuild with dependencies installed (python -m pip install -r requirements.txt)."
+        ) from exc
+
+    app = build_app(
+        tor_update_mode=args.tor_update,
+        tor_update_manifest=args.tor_update_manifest,
+        prefer_system_tor=args.prefer_system_tor,
+    )
+    config = uvicorn.Config(app, host=host_override or args.host, port=port_override or args.port)
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    return server, thread
 
 
 def main() -> int:

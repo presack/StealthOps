@@ -12,7 +12,7 @@ import uuid
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from core_ops import QueryConfig, StealthQueryEngine
+from core_ops import QueryConfig, StealthQueryEngine, internet_available
 from tor_engine import TorEngine
 
 
@@ -155,6 +155,8 @@ def build_app(
             if not text:
                 return ""
             line = text.splitlines()[0].strip()
+            if line.lower().startswith("no a/aaaa record available for network whois"):
+                return "No IP address available for network WHOIS lookup."
             if len(line) > max_len:
                 return line[: max_len - 3].rstrip() + "..."
             return line
@@ -293,6 +295,16 @@ def build_app(
         else:
             whois_panel_html = "<p class='text-slate-400 text-sm'>Awaiting data...</p>"
 
+        if network_whois_record:
+            network_panel_html = render_record_lines(network_whois_record)
+            network_panel_min_h = "min-h-[12rem]"
+        elif network_notice:
+            network_panel_html = "<p class='text-slate-300 text-sm'>No network WHOIS record to display.</p>"
+            network_panel_min_h = "min-h-[4rem]"
+        else:
+            network_panel_html = "<p class='text-slate-400 text-sm'>Awaiting data...</p>"
+            network_panel_min_h = "min-h-[12rem]"
+
         return f"""
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-6'>
   <h3 class='font-semibold mb-2'>Address lookup</h3>
@@ -310,8 +322,8 @@ def build_app(
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2'>Network Whois record</h3>
   {"<p class='text-amber-300 text-xs mb-2'>" + html.escape(network_notice) + "</p>" if network_notice else ""}
-  <div class='min-h-[12rem]'>
-    {render_record_lines(network_whois_record)}
+  <div class='{network_panel_min_h}'>
+    {network_panel_html}
   </div>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
@@ -473,7 +485,12 @@ def build_app(
         const body = new FormData(form);
         const res = await fetch('/query/start', {{ method: 'POST', body }});
         if (!res.ok) {{
-          panel.innerHTML = "<p class='text-red-400'>Failed to start query.</p>";
+          let msg = "Failed to start query.";
+          try {{
+            const errData = await res.json();
+            if (errData && errData.error) msg = errData.error;
+          }} catch (_) {{}}
+          panel.innerHTML = "<p class='text-red-400'>" + msg + "</p>";
           return;
         }}
         const data = await res.json();
@@ -555,6 +572,14 @@ def build_app(
         target: str = Form(...),
         route_mode: str = Form("public"),
     ) -> JSONResponse:
+        if not internet_available(timeout=1.0):
+            return JSONResponse(
+                {
+                    "error": "internet connectivity check failed (no network route detected)",
+                    "job_id": "",
+                },
+                status_code=503,
+            )
         selected_mode = "stealth" if route_mode == "stealth" else "public"
         target_value = target.strip()
         job_id = uuid.uuid4().hex

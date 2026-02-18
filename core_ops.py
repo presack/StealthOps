@@ -25,6 +25,18 @@ HTTP_TIMEOUT_SECONDS = 10
 WHOIS_TIMEOUT_SECONDS = 8
 
 
+def internet_available(timeout: float = 1.0) -> bool:
+    # Fast, DNS-independent connectivity probe.
+    probes = [("1.1.1.1", 53), ("8.8.8.8", 53), ("9.9.9.9", 53)]
+    for host, port in probes:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 @dataclass
 class QueryConfig:
     block_non_tor: bool = False
