@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import shlex
@@ -14,6 +15,8 @@ from typing import Callable
 from core_ops import QueryConfig, StealthQueryEngine
 from tor_engine import TorEngine
 from web_ui import build_app
+
+_ANSI_READY: bool | None = None
 
 
 def human_label(key: str) -> str:
@@ -323,11 +326,47 @@ def _truncate_text(value: str, max_len: int = 64) -> str:
 
 
 def _color_enabled(args: argparse.Namespace) -> bool:
+    global _ANSI_READY
     if args.no_color:
         return False
     if os.environ.get("NO_COLOR"):
         return False
-    return _interactive_stdio()
+    if not _interactive_stdio():
+        return False
+    if _ANSI_READY is None:
+        _ANSI_READY = _enable_ansi()
+    return bool(_ANSI_READY)
+
+
+def _enable_ansi() -> bool:
+    if os.name != "nt":
+        return True
+
+    # Prefer colorama if present; this handles older Windows console quirks.
+    try:
+        import colorama  # type: ignore
+
+        colorama.just_fix_windows_console()
+        return True
+    except Exception:
+        pass
+
+    # Fallback: explicitly enable VT mode on stdout/stderr.
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+    handles = (-11, -12)  # STD_OUTPUT_HANDLE, STD_ERROR_HANDLE
+    kernel32 = ctypes.windll.kernel32
+    ok_any = False
+    for handle_id in handles:
+        handle = kernel32.GetStdHandle(handle_id)
+        if handle in (0, -1):
+            continue
+        mode = ctypes.c_uint()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            continue
+        new_mode = mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        if kernel32.SetConsoleMode(handle, new_mode):
+            ok_any = True
+    return ok_any
 
 
 def _c(enabled: bool, text: str, code: str) -> str:

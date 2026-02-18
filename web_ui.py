@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import ipaddress
 import json
 import threading
 import time
@@ -166,9 +167,31 @@ def build_app(
             or network_whois_data.get("network_whois_error")
             or ""
         )
+        query_value = str(address_data.get("query", "")).strip()
+        is_ip_query = False
+        try:
+            ipaddress.ip_address(query_value)
+            is_ip_query = True
+        except Exception:
+            is_ip_query = False
+
+        address_error = compact_notice(address_data.get("address_lookup_error", ""))
+        canonical_name = str(address_data.get("canonical_name", "")).strip()
+        ip_reverse_lookup_failed = bool(
+            is_ip_query and address_error and (not canonical_name or canonical_name == query_value)
+        )
+
         dns_notices = []
-        for key in sorted(k for k in dns_data.keys() if k.endswith("_error")):
+        for key in sorted(k for k in dns_data.keys() if k.endswith("_error") and k != "ptr_error"):
             dns_notices.append(f"{key.replace('_', ' ').strip()}: {compact_notice(dns_data.get(key, ''))}")
+        ptr_error = compact_notice(dns_data.get("ptr_error", ""))
+        if ptr_error:
+            if is_ip_query and "." in query_value:
+                ptr_name = ".".join(reversed(query_value.split("."))) + ".in-addr.arpa"
+                ptr_kind = "NameError" if "does not exist" in ptr_error.lower() or "nxdomain" in ptr_error.lower() else ptr_error
+                dns_notices.append(f"DNS query for {ptr_name} returned an error from the server: {ptr_kind}")
+            else:
+                dns_notices.append(f"ptr error: {ptr_error}")
         if mx_data.get("mx_error"):
             dns_notices.append(f"mx error: {compact_notice(mx_data.get('mx_error', ''))}")
 
@@ -219,7 +242,7 @@ def build_app(
                 "<td class='py-1 pl-3 align-top text-slate-400 whitespace-nowrap'>-</td>"
                 "</tr>"
             )
-        dns_records_html = "".join(dns_rows) if dns_rows else "<tr><td class='py-1 pr-3' colspan='5'>No DNS records</td></tr>"
+        dns_records_html = "".join(dns_rows) if dns_rows else "<tr><td class='py-1 pr-3' colspan='5'>No records to display</td></tr>"
 
         headers_rows = ""
         for key, value in header_data.get("headers", {}).items():
@@ -243,19 +266,45 @@ def build_app(
 
         whois_cmd = html.escape(f"whois {dns_data.get('domain', '<domain>')}")
         http_cmd = html.escape(f"curl -I {header_data.get('url', '<url>')}")
+        whois_missing_domain = (
+            is_ip_query
+            and whois_error.lower().startswith("unable to derive domain for whois from ip target")
+            and not whois_record
+        )
+
+        if ip_reverse_lookup_failed:
+            address_panel_html = (
+                "<p class='text-slate-100 text-sm'><span class='text-amber-300'>lookup failed</span> "
+                + html.escape(query_value)
+                + "</p>"
+                "<p class='text-slate-300 text-sm mt-1'>Could not find a domain name corresponding to this IP address.</p>"
+            )
+        elif address_summary:
+            address_panel_html = f"<table class='text-sm w-full'><tbody>{render_kv_rows(address_summary)}</tbody></table>"
+        else:
+            address_panel_html = "<p class='text-slate-400 text-sm'>Awaiting data...</p>"
+
+        if whois_missing_domain:
+            whois_panel_html = "<p class='text-slate-300 text-sm'>Don't have a domain name for which to get a record</p>"
+        elif whois_record:
+            whois_panel_html = render_pre_block(whois_record, compact=True)
+        elif whois_error:
+            whois_panel_html = "<p class='text-slate-300 text-sm'>No WHOIS record returned.</p>"
+        else:
+            whois_panel_html = "<p class='text-slate-400 text-sm'>Awaiting data...</p>"
 
         return f"""
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-6'>
   <h3 class='font-semibold mb-2'>Address lookup</h3>
-  <div class='min-h-[9rem]'>
-    <table class='text-sm w-full'><tbody>{render_kv_rows(address_summary) if address_summary else "<tr><td class='text-slate-400 text-sm'>Awaiting data...</td></tr>"}</tbody></table>
+  <div class='min-h-[4rem]'>
+    {address_panel_html}
   </div>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2' title='{whois_cmd}'>Domain Whois summary</h3>
-  <div class='min-h-[18rem]'>
-    {("<p class='text-amber-300 text-xs mb-2 break-words'>" + html.escape(whois_error) + "</p>") if whois_error else ""}
-    {render_pre_block(whois_record, compact=True) if whois_record else "<p class='text-slate-400 text-sm'>Awaiting data...</p>"}
+  <div class='min-h-[4rem]'>
+    {("<p class='text-amber-300 text-xs mb-2 break-words'>" + html.escape(whois_error) + "</p>") if whois_error and not whois_missing_domain else ""}
+    {whois_panel_html}
   </div>
 </section>
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>

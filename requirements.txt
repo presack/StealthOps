@@ -6,3 +6,4 @@ requests[socks]
 stem
 pysocks
 python-multipart
+colorama
