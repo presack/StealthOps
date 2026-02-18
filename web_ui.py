@@ -36,6 +36,7 @@ def human_label(key: str) -> str:
         "whois_error": "WHOIS Error",
         "network_whois_error": "Network WHOIS Error",
         "network_whois_warning": "Network WHOIS Warning",
+        "asn": "ASN",
         "net_name": "Net Name",
         "net_handle": "Net Handle",
         "net_type": "Net Type",
@@ -148,19 +149,28 @@ def build_app(
             ]
             if key in address_data
         }
+        def compact_notice(value: str, max_len: int = 120) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            line = text.splitlines()[0].strip()
+            if len(line) > max_len:
+                return line[: max_len - 3].rstrip() + "..."
+            return line
+
         whois_record = str(whois_data.get("domain_whois_record", "")).strip()
-        whois_error = str(whois_data.get("whois_error", "")).strip()
+        whois_error = compact_notice(whois_data.get("whois_error", ""))
         network_whois_record = str(network_whois_data.get("network_whois_record", "")).strip()
-        network_notice = str(
+        network_notice = compact_notice(
             network_whois_data.get("network_whois_warning")
             or network_whois_data.get("network_whois_error")
             or ""
-        ).strip()
+        )
         dns_notices = []
         for key in sorted(k for k in dns_data.keys() if k.endswith("_error")):
-            dns_notices.append(f"DNS query issue ({key}): {dns_data.get(key)}")
+            dns_notices.append(f"{key.replace('_', ' ').strip()}: {compact_notice(dns_data.get(key, ''))}")
         if mx_data.get("mx_error"):
-            dns_notices.append(f"DNS query issue (mx_error): {mx_data.get('mx_error')}")
+            dns_notices.append(f"mx error: {compact_notice(mx_data.get('mx_error', ''))}")
 
         def format_soa_data(value: str) -> str:
             parts = str(value).split()

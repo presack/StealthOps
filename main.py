@@ -7,6 +7,8 @@ import json
 import os
 import shlex
 import sys
+import threading
+import time
 from typing import Callable
 
 from core_ops import QueryConfig, StealthQueryEngine
@@ -33,6 +35,7 @@ def human_label(key: str) -> str:
         "network_whois_error": "Network WHOIS Error",
         "network_whois_warning": "Network WHOIS Warning",
         "net_name": "Net Name",
+        "asn": "ASN",
         "net_type": "Net Type",
         "start_address": "Start Address",
         "end_address": "End Address",
@@ -171,6 +174,7 @@ def format_cli_report(result: dict) -> str:
     lines.append("=== NETWORK WHOIS ===  [source: RDAP]")
     for field in [
         "ip",
+        "asn",
         "organization",
         "net_name",
         "cidr",
@@ -257,12 +261,40 @@ def _maybe_prompt_install_tor(tor_engine: TorEngine) -> bool:
 
 
 def _execute_query(query_engine: StealthQueryEngine, target: str, emit_json: bool, use_color: bool = False) -> int:
+    def run_with_activity(label: str, fn: Callable[[], dict]) -> dict:
+        if not _interactive_stdio():
+            return fn()
+        stop = threading.Event()
+
+        def spinner() -> None:
+            glyphs = "|/-\\"
+            idx = 0
+            while not stop.wait(0.12):
+                sys.stderr.write(f"\r[{glyphs[idx % len(glyphs)]}] {label}...")
+                sys.stderr.flush()
+                idx += 1
+            clear_len = len(label) + 10
+            sys.stderr.write("\r" + (" " * clear_len) + "\r")
+            sys.stderr.flush()
+
+        thread = threading.Thread(target=spinner, daemon=True)
+        thread.start()
+        try:
+            return fn()
+        finally:
+            stop.set()
+            thread.join(timeout=0.3)
+
     try:
-        result = query_engine.run_all(target)
+        start = time.monotonic()
+        result = run_with_activity("Gathering results", lambda: query_engine.run_all(target))
+        elapsed = time.monotonic() - start
         if emit_json:
             print(json.dumps(result, indent=2))
         else:
             print(_colorize_report(format_cli_report(result), use_color))
+        if _interactive_stdio():
+            print(f"[status] query_complete elapsed={elapsed:.1f}s")
         return 0
     except Exception as exc:
         print(f"error: {exc}")

@@ -17,6 +17,13 @@ import whois
 
 from tor_engine import TorEngine
 
+DOH_TIMEOUT_SECONDS = 8
+DNS_LIFETIME_SECONDS = 5
+MX_LIFETIME_SECONDS = 5
+RDAP_TIMEOUT_SECONDS = 7
+HTTP_TIMEOUT_SECONDS = 10
+WHOIS_TIMEOUT_SECONDS = 8
+
 
 @dataclass
 class QueryConfig:
@@ -51,7 +58,7 @@ class StealthQueryEngine:
             params={"name": domain, "type": record_type},
             headers={"accept": "application/dns-json"},
             proxies=proxies,
-            timeout=12,
+            timeout=DOH_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         payload = response.json()
@@ -65,12 +72,31 @@ class StealthQueryEngine:
         resolver.port = 53
         return resolver
 
-    def _resolver_query(self, name: str, rtype: str, lifetime: float = 8) -> list[str]:
+    def _resolver_query(self, name: str, rtype: str, lifetime: float = DNS_LIFETIME_SECONDS) -> list[str]:
         try:
             answers = self._resolver_fallback().resolve(name, rtype, lifetime=lifetime)
             return [str(record).rstrip(".") for record in answers]
         except dns.resolver.NoAnswer:
             return []
+
+    @staticmethod
+    def _short_error(value: Any, max_len: int = 140) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "request failed"
+        line = text.splitlines()[0].strip()
+        lower = line.lower()
+        if "timed out" in lower or "timeout" in lower:
+            return "timed out"
+        if "nxdomain" in lower:
+            return "domain does not exist"
+        if "noanswer" in lower or "no answer" in lower:
+            return "no answer returned"
+        if "servfail" in lower:
+            return "upstream DNS server failed"
+        if len(line) > max_len:
+            return line[: max_len - 3].rstrip() + "..."
+        return line
 
     @staticmethod
     def _is_ip(value: str) -> bool:
@@ -456,9 +482,9 @@ class StealthQueryEngine:
                 ("SOA", "soa"),
             ):
                 try:
-                    out[key] = self._resolver_query(domain, rtype, lifetime=8)
+                    out[key] = self._resolver_query(domain, rtype, lifetime=DNS_LIFETIME_SECONDS)
                 except Exception as dns_exc:
-                    out[f"{key}_error"] = str(dns_exc)
+                    out[f"{key}_error"] = self._short_error(dns_exc)
             return out
 
         for rtype, key in (
@@ -474,15 +500,15 @@ class StealthQueryEngine:
                 out[key] = self._doh_query(domain, rtype)
             except Exception as doh_exc:
                 if self.config.block_non_tor:
-                    out[f"{key}_error"] = str(doh_exc)
+                    out[f"{key}_error"] = self._short_error(doh_exc)
                     continue
 
                 # Controlled fallback when user allows non-Tor traffic.
                 try:
-                    out[key] = self._resolver_query(domain, rtype, lifetime=8)
+                    out[key] = self._resolver_query(domain, rtype, lifetime=DNS_LIFETIME_SECONDS)
                     out[f"{key}_warning"] = "non-tor fallback used"
                 except Exception as dns_exc:
-                    out[f"{key}_error"] = f"doh={doh_exc}; resolver={dns_exc}"
+                    out[f"{key}_error"] = f"doh={self._short_error(doh_exc)}; resolver={self._short_error(dns_exc)}"
 
         return out
 
@@ -491,7 +517,7 @@ class StealthQueryEngine:
 
         if self.config.route_mode == "public":
             try:
-                answers = self._resolver_fallback().resolve(domain, "MX", lifetime=8)
+                answers = self._resolver_fallback().resolve(domain, "MX", lifetime=MX_LIFETIME_SECONDS)
                 result["mx"] = [
                     {"priority": r.preference, "host": str(r.exchange).rstrip(".")}
                     for r in sorted(answers, key=lambda x: x.preference)
@@ -499,7 +525,7 @@ class StealthQueryEngine:
             except dns.resolver.NoAnswer:
                 result["mx"] = []
             except Exception as dns_exc:
-                result["mx_error"] = str(dns_exc)
+                result["mx_error"] = self._short_error(dns_exc)
             return result
 
         try:
@@ -518,11 +544,11 @@ class StealthQueryEngine:
             return result
         except Exception as doh_exc:
             if self.config.block_non_tor:
-                result["mx_error"] = str(doh_exc)
+                result["mx_error"] = self._short_error(doh_exc)
                 return result
 
         try:
-            answers = self._resolver_fallback().resolve(domain, "MX", lifetime=8)
+            answers = self._resolver_fallback().resolve(domain, "MX", lifetime=MX_LIFETIME_SECONDS)
             result["mx"] = [
                 {"priority": r.preference, "host": str(r.exchange).rstrip(".")}
                 for r in sorted(answers, key=lambda x: x.preference)
@@ -532,16 +558,16 @@ class StealthQueryEngine:
             result["mx"] = []
             result["mx_warning"] = "non-tor fallback used"
         except Exception as dns_exc:
-            result["mx_error"] = str(dns_exc)
+            result["mx_error"] = self._short_error(dns_exc)
 
         return result
 
     def whois_lookup(self, domain: str) -> dict[str, Any]:
         # python-whois does not support SOCKS directly; this remains best-effort.
         try:
-            data = whois.whois(domain)
+            data = whois.whois(domain, timeout=WHOIS_TIMEOUT_SECONDS)
         except Exception as exc:
-            return {"domain": domain, "whois_error": str(exc)}
+            return {"domain": domain, "whois_error": self._short_error(exc)}
 
         normalized = {}
         raw_chunks: list[str] = []
@@ -670,6 +696,7 @@ class StealthQueryEngine:
         add("Start Address", "startAddress")
         add("End Address", "endAddress")
         add("IP Version", "ipVersion")
+        add("ASN", "asn")
         add("Type", "type")
         add("Country", "country")
         add("Parent Handle", "parentHandle")
@@ -722,6 +749,54 @@ class StealthQueryEngine:
 
         return "\n".join(lines).strip()
 
+    @staticmethod
+    def _extract_asn(payload: dict[str, Any]) -> str | None:
+        def normalize(candidate: Any) -> str | None:
+            text = str(candidate or "").strip().upper()
+            if not text:
+                return None
+            if text.startswith("AS") and text[2:].isdigit():
+                return text[2:]
+            if text.isdigit():
+                return text
+            return None
+
+        candidates: list[str] = []
+        for key in (
+            "asn",
+            "asNumber",
+            "originAutnum",
+            "origin_autnum",
+            "arin_originas0_originautnums",
+            "originAutnums",
+        ):
+            value = payload.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    found = normalize(item)
+                    if found and found not in candidates:
+                        candidates.append(found)
+            else:
+                found = normalize(value)
+                if found and found not in candidates:
+                    candidates.append(found)
+
+        for section in ("remarks", "notices"):
+            values = payload.get(section, [])
+            if not isinstance(values, list):
+                continue
+            for entry in values:
+                if not isinstance(entry, dict):
+                    continue
+                for line in entry.get("description", []):
+                    text = str(line or "")
+                    for match in re.findall(r"\bAS(\d{1,10})\b", text, flags=re.IGNORECASE):
+                        token = str(match).strip()
+                        if token and token not in candidates:
+                            candidates.append(token)
+
+        return candidates[0] if candidates else None
+
     def network_whois_lookup(self, dns_data: dict[str, Any], ip_override: str | None = None) -> dict[str, Any]:
         ip_value = ip_override or self._first_ip(dns_data)
         if not ip_value:
@@ -746,21 +821,28 @@ class StealthQueryEngine:
                     url,
                     headers={"accept": "application/rdap+json, application/json"},
                     proxies=proxies,
-                    timeout=15,
+                    timeout=RDAP_TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()
                 payload = response.json()
                 used_url = url
                 break
             except Exception as exc:
-                last_error = str(exc)
+                last_error = self._short_error(exc)
 
         if payload is None:
             result["network_whois_error"] = last_error or "network whois lookup failed"
             return result
 
+        asn = self._extract_asn(payload)
+        if asn:
+            result["asn"] = asn
+
         result["rdap_url"] = used_url
-        result["network_whois_record"] = self._format_network_whois_record(payload, used_url or "unknown")
+        payload_for_render = dict(payload)
+        if asn:
+            payload_for_render["asn"] = asn
+        result["network_whois_record"] = self._format_network_whois_record(payload_for_render, used_url or "unknown")
         for src_key, dst_key in (
             ("name", "net_name"),
             ("handle", "net_handle"),
@@ -828,7 +910,7 @@ class StealthQueryEngine:
         try:
             response = requests.get(
                 target,
-                timeout=12,
+                timeout=HTTP_TIMEOUT_SECONDS,
                 proxies=proxies,
                 allow_redirects=True,
             )
@@ -840,7 +922,7 @@ class StealthQueryEngine:
                 "tor_routed": bool(proxies),
             }
         except Exception as exc:
-            return {"url": target, "header_error": str(exc), "tor_routed": bool(proxies)}
+            return {"url": target, "header_error": self._short_error(exc), "tor_routed": bool(proxies)}
 
     def run_all(self, target: str) -> dict[str, Any]:
         return self.run_all_staged(target)
@@ -886,6 +968,7 @@ class StealthQueryEngine:
             mx_future = pool.submit(self.mx_lookup, whois_target or dns_target) if not self._is_ip(whois_target or dns_target) else None
             whois_future = pool.submit(self.whois_lookup, whois_target) if whois_target else None
             header_future = pool.submit(self.header_inspect, target)
+            network_future = pool.submit(self.network_whois_lookup, {}, network_ip) if network_ip else None
 
             future_map = {}
             if dns_future:
@@ -895,6 +978,8 @@ class StealthQueryEngine:
             if whois_future:
                 future_map[whois_future] = "whois"
             future_map[header_future] = "headers"
+            if network_future:
+                future_map[network_future] = "network_whois"
 
             if not dns_future:
                 out["dns"] = self._empty_dns_payload(dns_target)
@@ -912,14 +997,16 @@ class StealthQueryEngine:
                     out[key] = future.result()
                 except Exception as exc:
                     if key == "headers":
-                        out[key] = {"url": target, "header_error": str(exc), "tor_routed": self.config.route_mode == "stealth"}
+                        out[key] = {"url": target, "header_error": self._short_error(exc), "tor_routed": self.config.route_mode == "stealth"}
                     elif key == "whois":
-                        out[key] = {"whois_error": str(exc)}
+                        out[key] = {"whois_error": self._short_error(exc)}
                     elif key == "mx":
-                        out[key] = {"domain": dns_target, "mx_error": str(exc), "mx": []}
+                        out[key] = {"domain": dns_target, "mx_error": self._short_error(exc), "mx": []}
+                    elif key == "network_whois":
+                        out[key] = {"ip": network_ip, "network_whois_error": self._short_error(exc)}
                     else:
                         out[key] = self._empty_dns_payload(dns_target)
-                        out[key]["dns_error"] = str(exc)
+                        out[key]["dns_error"] = self._short_error(exc)
                 emit(out)
 
         dns_data = out.get("dns", self._empty_dns_payload(dns_target))
@@ -931,11 +1018,11 @@ class StealthQueryEngine:
             try:
                 reverse_name = ".".join(reversed(lookup_target.split("."))) + ".in-addr.arpa"
                 if self.config.route_mode == "public":
-                    dns_data["ptr"] = self._resolver_query(reverse_name, "PTR", lifetime=8)
+                    dns_data["ptr"] = self._resolver_query(reverse_name, "PTR", lifetime=DNS_LIFETIME_SECONDS)
                 else:
                     dns_data["ptr"] = self._doh_query(reverse_name, "PTR")
             except Exception as ptr_exc:
-                dns_data["ptr_error"] = str(ptr_exc)
+                dns_data["ptr_error"] = self._short_error(ptr_exc)
 
             # Pull authoritative context from derived registrable domain where possible.
             if whois_target:
@@ -952,7 +1039,7 @@ class StealthQueryEngine:
             out["address"] = address_data
             emit(out)
 
-        network_whois_data = self.network_whois_lookup(dns_data, ip_override=network_ip)
+        network_whois_data = out.get("network_whois") or self.network_whois_lookup(dns_data, ip_override=network_ip)
         out["network_whois"] = network_whois_data
         emit(out)
 
