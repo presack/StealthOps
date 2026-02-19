@@ -1223,11 +1223,8 @@ class StealthQueryEngine:
                 whois_data = {"whois_error": f"WHOIS unavailable for {class_name} ({rfc_ref})"}
                 mx_data = {"domain": lookup_target, "mx": []}
                 network_whois_data = self.network_whois_lookup({}, ip_override=lookup_target)
-                headers_data = (
-                    self.header_inspect(lookup_target)
-                    if include_headers
-                    else {"url": target, "skipped": True}
-                )
+                # For special-purpose IPs, skip HTTP probing to avoid avoidable connection timeouts.
+                headers_data = {"url": target, "skipped": True}
                 final = {
                     "address": address_data,
                     "dns": dns_data,
