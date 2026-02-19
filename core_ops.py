@@ -21,6 +21,7 @@ DOH_TIMEOUT_SECONDS = 8
 DNS_LIFETIME_SECONDS = 5
 MX_LIFETIME_SECONDS = 5
 RDAP_TIMEOUT_SECONDS = 5
+RDAP_DOMAIN_TIMEOUT_SECONDS = 5
 HTTP_TIMEOUT_SECONDS = 10
 WHOIS_TIMEOUT_SECONDS = 8
 NETWORK_WHOIS_BUDGET_SECONDS = 3.0
@@ -582,6 +583,9 @@ class StealthQueryEngine:
         try:
             data = whois.whois(domain, timeout=WHOIS_TIMEOUT_SECONDS)
         except Exception as exc:
+            rdap_fallback = self._domain_rdap_lookup(domain)
+            if rdap_fallback:
+                return rdap_fallback
             return {"domain": domain, "whois_error": self._short_error(exc)}
 
         normalized = {}
@@ -621,6 +625,83 @@ class StealthQueryEngine:
             normalized["raw_whois"] = "\n\n".join(raw_chunks)
         normalized["domain_whois_record"] = self._build_domain_whois_record(normalized, domain)
         normalized["domain"] = domain
+        return normalized
+
+    @staticmethod
+    def _domain_rdap_event_date(payload: dict[str, Any], action_tokens: tuple[str, ...]) -> str:
+        events = payload.get("events", [])
+        if not isinstance(events, list):
+            return ""
+        tokens = tuple(t.lower() for t in action_tokens)
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            action = str(event.get("eventAction", "")).lower()
+            if any(token in action for token in tokens):
+                return str(event.get("eventDate", "")).strip()
+        return ""
+
+    @classmethod
+    def _domain_rdap_lookup(cls, domain: str) -> dict[str, Any] | None:
+        urls = [
+            f"https://rdap.org/domain/{domain}",
+        ]
+        payload: dict[str, Any] | None = None
+        used_url = ""
+
+        for url in urls:
+            try:
+                response = requests.get(
+                    url,
+                    headers={"accept": "application/rdap+json, application/json"},
+                    timeout=RDAP_DOMAIN_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                used_url = url
+                break
+            except Exception:
+                continue
+
+        if not payload:
+            return None
+
+        name_servers: list[str] = []
+        for ns in payload.get("nameservers", []):
+            if isinstance(ns, dict):
+                value = str(ns.get("ldhName", "")).strip().rstrip(".")
+                if value and value not in name_servers:
+                    name_servers.append(value)
+
+        registrar = ""
+        for entity in payload.get("entities", []):
+            if not isinstance(entity, dict):
+                continue
+            roles = [str(r).lower() for r in entity.get("roles", [])]
+            if "registrar" not in roles:
+                continue
+            registrar = (
+                cls._extract_vcard_field(entity, "fn")
+                or cls._extract_vcard_field(entity, "org")
+                or str(entity.get("handle", ""))
+            ).strip()
+            if registrar:
+                break
+
+        normalized: dict[str, Any] = {
+            "domain": domain,
+            "domain_name": str(payload.get("ldhName", domain)).strip() or domain,
+            "name_servers": name_servers,
+            "status": payload.get("status", []),
+            "creation_date": cls._domain_rdap_event_date(payload, ("registration", "registered", "create")),
+            "updated_date": cls._domain_rdap_event_date(payload, ("last changed", "last update", "update")),
+            "expiration_date": cls._domain_rdap_event_date(payload, ("expiration", "expiry", "expire")),
+            "whois_warning": f"domain WHOIS fallback via RDAP ({used_url})",
+        }
+        if registrar:
+            normalized["registrar"] = registrar
+
+        normalized["domain_whois_record"] = cls._build_domain_whois_record(normalized, domain)
         return normalized
 
     def address_lookup(self, domain: str, dns_data: dict[str, Any]) -> dict[str, Any]:

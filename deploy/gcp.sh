@@ -34,7 +34,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --image "${IMAGE}" \
   --region "${REGION}" \
   --platform managed \
-  --allow-unauthenticated \
+  --no-allow-unauthenticated \
   --port 8080 \
   --min-instances 0 \
   --max-instances 2

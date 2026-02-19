@@ -155,6 +155,9 @@ def build_app(
             if not text:
                 return ""
             line = text.splitlines()[0].strip()
+            lower_line = line.lower()
+            if "connection reset by peer" in lower_line:
+                return "WHOIS server reset the connection."
             if line.lower().startswith("no a/aaaa record available for network whois"):
                 return "No IP address available for network WHOIS lookup."
             if len(line) > max_len:
