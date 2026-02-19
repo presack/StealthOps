@@ -23,6 +23,8 @@ MX_LIFETIME_SECONDS = 5
 RDAP_TIMEOUT_SECONDS = 5
 HTTP_TIMEOUT_SECONDS = 10
 WHOIS_TIMEOUT_SECONDS = 8
+NETWORK_WHOIS_BUDGET_SECONDS = 3.0
+NETWORK_WHOIS_CACHE_TTL_SECONDS = 300.0
 
 
 def internet_available(timeout: float = 1.0) -> bool:
@@ -47,6 +49,7 @@ class StealthQueryEngine:
     def __init__(self, tor_engine: TorEngine, config: QueryConfig | None = None) -> None:
         self.tor_engine = tor_engine
         self.config = config or QueryConfig()
+        self._network_whois_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
     def _proxies(self) -> dict[str, str] | None:
         if self.config.route_mode == "public":
@@ -824,6 +827,11 @@ class StealthQueryEngine:
         if not ip_value:
             return {"network_whois_error": "no A/AAAA record available for network whois"}
 
+        now = datetime.utcnow().timestamp()
+        cached = self._network_whois_cache.get(ip_value)
+        if cached and (now - cached[0]) <= NETWORK_WHOIS_CACHE_TTL_SECONDS:
+            return dict(cached[1])
+
         proxies = self._proxies()
         result: dict[str, Any] = {"ip": ip_value}
         if not proxies and self.config.route_mode != "public":
@@ -836,41 +844,52 @@ class StealthQueryEngine:
         errors: list[str] = []
         payload: dict[str, Any] | None = None
         used_url: str | None = None
+        deadline = datetime.utcnow().timestamp() + NETWORK_WHOIS_BUDGET_SECONDS
 
-        with ThreadPoolExecutor(max_workers=min(2, len(urls))) as pool:
-            future_map = {
-                pool.submit(
-                    requests.get,
-                    url,
-                    headers={"accept": "application/rdap+json, application/json"},
-                    proxies=proxies,
-                    timeout=RDAP_TIMEOUT_SECONDS,
-                ): url
-                for url in urls
-            }
+        pool = ThreadPoolExecutor(max_workers=min(2, len(urls)))
+        future_map = {}
+        try:
+            remaining = max(0.5, min(RDAP_TIMEOUT_SECONDS, deadline - datetime.utcnow().timestamp()))
+            for url in urls:
+                future_map[
+                    pool.submit(
+                        requests.get,
+                        url,
+                        headers={"accept": "application/rdap+json, application/json"},
+                        proxies=proxies,
+                        timeout=(1.5, remaining),
+                    )
+                ] = url
 
-            for future in as_completed(list(future_map.keys())):
-                url = future_map[future]
+            while future_map and datetime.utcnow().timestamp() < deadline:
+                remaining_wait = max(0.0, deadline - datetime.utcnow().timestamp())
+                if remaining_wait <= 0:
+                    break
+                try:
+                    future = next(as_completed(list(future_map.keys()), timeout=remaining_wait))
+                except Exception:
+                    break
+                url = future_map.pop(future)
                 try:
                     response = future.result()
                     response.raise_for_status()
                     payload = response.json()
                     used_url = url
-                    # Best-effort cancellation of remaining request if it hasn't started.
-                    for pending in future_map.keys():
-                        if pending is not future:
-                            pending.cancel()
                     break
                 except Exception as exc:
                     err = self._short_error(exc)
                     if err and err not in errors:
                         errors.append(err)
+        finally:
+            # Do not wait on slower sibling request once we have a winner or timeout budget is reached.
+            pool.shutdown(wait=False, cancel_futures=True)
 
         if payload is None:
             if errors:
                 result["network_whois_error"] = "; ".join(errors[:2])
             else:
-                result["network_whois_error"] = "network whois lookup failed"
+                result["network_whois_error"] = "network whois lookup timed out"
+            self._network_whois_cache[ip_value] = (datetime.utcnow().timestamp(), dict(result))
             return result
 
         asn = self._extract_asn(payload)
@@ -940,6 +959,7 @@ class StealthQueryEngine:
             if abuse_phone:
                 result["abuse_phone"] = abuse_phone
 
+        self._network_whois_cache[ip_value] = (datetime.utcnow().timestamp(), dict(result))
         return result
 
     def header_inspect(self, url: str) -> dict[str, Any]:
