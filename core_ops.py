@@ -628,14 +628,24 @@ class StealthQueryEngine:
             "addresses": [],
         }
         if self._is_ip(domain):
+            result["addresses"] = [domain]
             try:
-                canonical, aliases, addresses = socket.gethostbyaddr(domain)
-                result["canonical_name"] = canonical.rstrip(".")
-                result["aliases"] = [str(v).rstrip(".") for v in aliases if v]
-                result["addresses"] = [str(v) for v in addresses if v]
+                reverse_name = ".".join(reversed(domain.split("."))) + ".in-addr.arpa"
+                ptr_values = (
+                    self._resolver_query(reverse_name, "PTR", lifetime=DNS_LIFETIME_SECONDS)
+                    if self.config.route_mode == "public"
+                    else self._doh_query(reverse_name, "PTR")
+                )
+                if ptr_values:
+                    result["canonical_name"] = str(ptr_values[0]).rstrip(".")
+                    if len(ptr_values) > 1:
+                        result["aliases"] = [str(v).rstrip(".") for v in ptr_values[1:]]
+                else:
+                    result["canonical_name"] = domain
+                    result["address_lookup_error"] = "host not found"
             except Exception as exc:
-                result["address_lookup_error"] = str(exc)
-                result["addresses"] = [domain]
+                result["canonical_name"] = domain
+                result["address_lookup_error"] = self._short_error(exc)
         else:
             try:
                 canonical, aliases, addresses = socket.gethostbyname_ex(domain)
@@ -971,7 +981,14 @@ class StealthQueryEngine:
         else:
             dns_target = lookup_target
             whois_target = lookup_target
-            address_data = {}
+            # Emit an immediate placeholder so the panel appears instantly.
+            address_data = {
+                "query": lookup_target,
+                "canonical_name": lookup_target,
+                "aliases": [],
+                "addresses": [],
+            }
+            out["address"] = address_data
 
         emit({"address": address_data} if address_data else {})
 
@@ -981,6 +998,11 @@ class StealthQueryEngine:
             whois_future = pool.submit(self.whois_lookup, whois_target) if whois_target else None
             header_future = pool.submit(self.header_inspect, target)
             network_future = pool.submit(self.network_whois_lookup, {}, network_ip) if network_ip else None
+            address_future = (
+                pool.submit(self.address_lookup, lookup_target, self._empty_dns_payload(lookup_target))
+                if not is_ip
+                else None
+            )
 
             future_map = {}
             if dns_future:
@@ -992,6 +1014,8 @@ class StealthQueryEngine:
             future_map[header_future] = "headers"
             if network_future:
                 future_map[network_future] = "network_whois"
+            if address_future:
+                future_map[address_future] = "address"
 
             if not dns_future:
                 out["dns"] = self._empty_dns_payload(dns_target)
@@ -1016,6 +1040,14 @@ class StealthQueryEngine:
                         out[key] = {"domain": dns_target, "mx_error": self._short_error(exc), "mx": []}
                     elif key == "network_whois":
                         out[key] = {"ip": network_ip, "network_whois_error": self._short_error(exc)}
+                    elif key == "address":
+                        out[key] = {
+                            "query": lookup_target,
+                            "canonical_name": lookup_target,
+                            "aliases": [],
+                            "addresses": [],
+                            "address_lookup_error": self._short_error(exc),
+                        }
                     else:
                         out[key] = self._empty_dns_payload(dns_target)
                         out[key]["dns_error"] = self._short_error(exc)
@@ -1046,8 +1078,29 @@ class StealthQueryEngine:
             out["dns"] = dns_data
             emit(out)
 
-        if not address_data:
-            address_data = self.address_lookup(lookup_target, dns_data)
+        if not is_ip:
+            existing_address = out.get("address", address_data if isinstance(address_data, dict) else {})
+            if not isinstance(existing_address, dict):
+                existing_address = {}
+            # Merge resolved DNS addresses without waiting on another lookup call.
+            merged = []
+            for value in existing_address.get("addresses", []):
+                text = str(value).strip()
+                if text and text not in merged:
+                    merged.append(text)
+            for value in dns_data.get("a", []):
+                text = str(value).strip()
+                if text and text not in merged:
+                    merged.append(text)
+            for value in dns_data.get("aaaa", []):
+                text = str(value).strip()
+                if text and text not in merged:
+                    merged.append(text)
+            existing_address["addresses"] = merged
+            if not str(existing_address.get("canonical_name", "")).strip():
+                cname = dns_data.get("cname", [])
+                existing_address["canonical_name"] = str(cname[0]).rstrip(".") if cname else lookup_target
+            address_data = existing_address
             out["address"] = address_data
             emit(out)
 
