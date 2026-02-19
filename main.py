@@ -181,9 +181,15 @@ def format_cli_report(result: dict) -> str:
 
     lines.append("")
     lines.append("=== NETWORK WHOIS ===  [source: RDAP]")
+    asn_present = "asn" in network_whois_data
+    asn_reason = str(network_whois_data.get("asn_unavailable_reason", "")).strip()
+    if asn_present:
+        lines.append(f"ASN: {network_whois_data.get('asn')}")
+    else:
+        fallback = asn_reason or "unavailable (origin ASN was not returned by the RDAP response)"
+        lines.append(f"ASN: {fallback}")
     for field in [
         "ip",
-        "asn",
         "organization",
         "net_name",
         "cidr",
@@ -280,6 +286,17 @@ def _execute_query(
     use_color: bool = False,
     include_headers: bool = False,
 ) -> int:
+    def render_query_banner() -> str:
+        title = f"[ QUERY START ]  target={target}"
+        border = "=" * max(64, len(title) + 6)
+        if not use_color:
+            return f"{border}\n{title}\n{border}"
+        return (
+            f"{_c(True, border, '94')}\n"
+            f"{_c(True, title, '30;106')}\n"
+            f"{_c(True, border, '94')}"
+        )
+
     def run_with_activity(label: str, fn: Callable[[], dict]) -> dict:
         if not _interactive_stdio():
             return fn()
@@ -308,6 +325,9 @@ def _execute_query(
         if not internet_available(timeout=1.0):
             print("error: internet connectivity check failed (no network route detected)")
             return 1
+        print("")
+        print(render_query_banner())
+        print("")
         start = time.monotonic()
         result = run_with_activity("Gathering results", lambda: query_engine.run_all(target, include_headers=include_headers))
         elapsed = time.monotonic() - start

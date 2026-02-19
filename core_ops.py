@@ -963,6 +963,50 @@ class StealthQueryEngine:
 
         return candidates[0] if candidates else None
 
+    @staticmethod
+    def _special_ip_context(ip_value: str) -> tuple[str, str] | None:
+        try:
+            ip_obj = ipaddress.ip_address(ip_value)
+        except ValueError:
+            return None
+
+        def in_net(cidr: str) -> bool:
+            return ip_obj in ipaddress.ip_network(cidr)
+
+        if ip_obj.version == 4:
+            if in_net("10.0.0.0/8") or in_net("172.16.0.0/12") or in_net("192.168.0.0/16"):
+                return ("private-use address space", "RFC 1918")
+            if in_net("100.64.0.0/10"):
+                return ("shared address space (carrier-grade NAT)", "RFC 6598")
+            if in_net("169.254.0.0/16"):
+                return ("link-local address space", "RFC 3927")
+            if in_net("127.0.0.0/8"):
+                return ("loopback address space", "RFC 1122")
+            if in_net("198.18.0.0/15"):
+                return ("benchmark testing address space", "RFC 2544")
+            if in_net("192.0.2.0/24") or in_net("198.51.100.0/24") or in_net("203.0.113.0/24"):
+                return ("documentation address space", "RFC 5737")
+            if in_net("240.0.0.0/4"):
+                return ("reserved address space", "RFC 1112")
+        else:
+            if in_net("fc00::/7"):
+                return ("unique-local address space", "RFC 4193")
+            if in_net("fe80::/10"):
+                return ("link-local address space", "RFC 4291")
+            if in_net("::1/128"):
+                return ("loopback address", "RFC 4291")
+            if in_net("2001:db8::/32"):
+                return ("documentation address space", "RFC 3849")
+
+        if ip_obj.is_multicast:
+            if ip_obj.version == 4:
+                return ("multicast address space", "RFC 5771")
+            return ("multicast address space", "RFC 4291")
+        if ip_obj.is_reserved:
+            return ("reserved address space", "IANA special-purpose registries")
+
+        return None
+
     def network_whois_lookup(self, dns_data: dict[str, Any], ip_override: str | None = None) -> dict[str, Any]:
         ip_value = ip_override or self._first_ip(dns_data)
         if not ip_value:
@@ -973,8 +1017,16 @@ class StealthQueryEngine:
         if cached and (now - cached[0]) <= NETWORK_WHOIS_CACHE_TTL_SECONDS:
             return dict(cached[1])
 
-        proxies = self._proxies()
         result: dict[str, Any] = {"ip": ip_value}
+        special_context = self._special_ip_context(ip_value)
+        if special_context:
+            class_name, rfc_ref = special_context
+            result["network_whois_error"] = f"RDAP unavailable for {class_name} ({rfc_ref})"
+            result["asn_unavailable_reason"] = f"ASN is unavailable for {class_name} ({rfc_ref})"
+            self._network_whois_cache[ip_value] = (datetime.utcnow().timestamp(), dict(result))
+            return result
+
+        proxies = self._proxies()
         if not proxies and self.config.route_mode != "public":
             result["network_whois_warning"] = "non-tor fallback used"
 
@@ -1036,6 +1088,8 @@ class StealthQueryEngine:
         asn = self._extract_asn(payload)
         if asn:
             result["asn"] = asn
+        else:
+            result["asn_unavailable_reason"] = "RDAP response does not include origin ASN data for this IP"
 
         result["rdap_url"] = used_url
         payload_for_render = dict(payload)
