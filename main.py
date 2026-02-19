@@ -108,6 +108,11 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
         help="Emit raw JSON results in CLI mode",
     )
     parser.add_argument(
+        "--headers",
+        action="store_true",
+        help="Include HTTP header inspection in CLI/console queries",
+    )
+    parser.add_argument(
         "--no-color",
         action="store_true",
         help="Disable ANSI colors in console/CLI output",
@@ -219,13 +224,17 @@ def format_cli_report(result: dict) -> str:
 
     lines.append("")
     lines.append("=== HTTP HEADERS ===  [source: GET + response headers]")
-    lines.append(f"URL: {headers_data.get('url', '-')}")
-    lines.append(f"Status Code: {headers_data.get('status_code', '-')}")
-    lines.append(f"Final URL: {headers_data.get('final_url', '-')}")
-    lines.append(f"Tor Routed: {headers_data.get('tor_routed', '-')}")
-    if "header_error" in headers_data:
+    if headers_data.get("skipped"):
+        lines.append("Skipped (use --headers to enable)")
+    elif "header_error" in headers_data:
+        lines.append(f"URL: {headers_data.get('url', '-')}")
+        lines.append(f"Tor Routed: {headers_data.get('tor_routed', '-')}")
         lines.append(f"header_error: {headers_data.get('header_error')}")
     else:
+        lines.append(f"URL: {headers_data.get('url', '-')}")
+        lines.append(f"Status Code: {headers_data.get('status_code', '-')}")
+        lines.append(f"Final URL: {headers_data.get('final_url', '-')}")
+        lines.append(f"Tor Routed: {headers_data.get('tor_routed', '-')}")
         lines.append("headers:")
         for key, value in headers_data.get("headers", {}).items():
             lines.append(f"- {key}: {value}")
@@ -264,7 +273,13 @@ def _maybe_prompt_install_tor(tor_engine: TorEngine) -> bool:
     return False
 
 
-def _execute_query(query_engine: StealthQueryEngine, target: str, emit_json: bool, use_color: bool = False) -> int:
+def _execute_query(
+    query_engine: StealthQueryEngine,
+    target: str,
+    emit_json: bool,
+    use_color: bool = False,
+    include_headers: bool = False,
+) -> int:
     def run_with_activity(label: str, fn: Callable[[], dict]) -> dict:
         if not _interactive_stdio():
             return fn()
@@ -294,7 +309,7 @@ def _execute_query(query_engine: StealthQueryEngine, target: str, emit_json: boo
             print("error: internet connectivity check failed (no network route detected)")
             return 1
         start = time.monotonic()
-        result = run_with_activity("Gathering results", lambda: query_engine.run_all(target))
+        result = run_with_activity("Gathering results", lambda: query_engine.run_all(target, include_headers=include_headers))
         elapsed = time.monotonic() - start
         if emit_json:
             print(json.dumps(result, indent=2))
@@ -469,13 +484,14 @@ def run_cli(args: argparse.Namespace) -> int:
         if tor_engine.last_error:
             print(f"[privacy] notice={tor_engine.last_error}")
 
-    return _execute_query(query_engine, target, args.json, use_color=use_color)
+    return _execute_query(query_engine, target, args.json, use_color=use_color, include_headers=bool(args.headers))
 
 
 def run_console(args: argparse.Namespace) -> int:
     route_mode = args.mode or "public"
     emit_json = bool(args.json)
     block_non_tor = bool(args.block_non_tor)
+    include_headers = bool(args.headers)
 
     tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
     use_color = _color_enabled(args)
@@ -562,6 +578,7 @@ def run_console(args: argparse.Namespace) -> int:
             print("  status                 print console status banner")
             print("  block <on|off>         set block non-tor mode")
             print("  json <on|off>          toggle JSON output")
+            print("  headers <on|off>       toggle HTTP header inspection")
             print("  clear                  clear the screen")
             print("  exit                   quit console")
             print("")
@@ -612,7 +629,7 @@ def run_console(args: argparse.Namespace) -> int:
                 print("")
                 continue
             target = parts[1]
-            _execute_query(query_engine, target, emit_json, use_color=use_color)
+            _execute_query(query_engine, target, emit_json, use_color=use_color, include_headers=include_headers)
             print("")
             continue
         if cmd == "mode":
@@ -672,9 +689,18 @@ def run_console(args: argparse.Namespace) -> int:
             print(_render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
             print("")
             continue
+        if cmd == "headers":
+            if len(parts) != 2 or parts[1].lower() not in {"on", "off"}:
+                print("usage: headers <on|off>")
+                print("")
+                continue
+            include_headers = parts[1].lower() == "on"
+            print(f"http headers: {'on' if include_headers else 'off'}")
+            print("")
+            continue
         shorthand_target = raw[1:].strip() if raw.startswith("!") else raw
         if shorthand_target:
-            _execute_query(query_engine, shorthand_target, emit_json, use_color=use_color)
+            _execute_query(query_engine, shorthand_target, emit_json, use_color=use_color, include_headers=include_headers)
             print("")
             continue
         print("unknown command. type 'help'")
@@ -695,7 +721,12 @@ def run_web(args: argparse.Namespace, host_override: str | None = None, port_ove
     )
     if not internet_available(timeout=1.0):
         print("[notice] internet connectivity check failed; queries will fail until connectivity returns")
-    uvicorn.run(app, host=host_override or args.host, port=port_override or args.port)
+    uvicorn.run(
+        app,
+        host=host_override or args.host,
+        port=port_override or args.port,
+        use_colors=False,
+    )
 
 
 def run_web_background(

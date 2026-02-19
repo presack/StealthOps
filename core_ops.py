@@ -20,7 +20,7 @@ from tor_engine import TorEngine
 DOH_TIMEOUT_SECONDS = 8
 DNS_LIFETIME_SECONDS = 5
 MX_LIFETIME_SECONDS = 5
-RDAP_TIMEOUT_SECONDS = 7
+RDAP_TIMEOUT_SECONDS = 5
 HTTP_TIMEOUT_SECONDS = 10
 WHOIS_TIMEOUT_SECONDS = 8
 
@@ -833,27 +833,44 @@ class StealthQueryEngine:
             f"https://rdap.org/ip/{ip_value}",
             f"https://rdap.arin.net/registry/ip/{ip_value}",
         ]
-        last_error: str | None = None
+        errors: list[str] = []
         payload: dict[str, Any] | None = None
         used_url: str | None = None
 
-        for url in urls:
-            try:
-                response = requests.get(
+        with ThreadPoolExecutor(max_workers=min(2, len(urls))) as pool:
+            future_map = {
+                pool.submit(
+                    requests.get,
                     url,
                     headers={"accept": "application/rdap+json, application/json"},
                     proxies=proxies,
                     timeout=RDAP_TIMEOUT_SECONDS,
-                )
-                response.raise_for_status()
-                payload = response.json()
-                used_url = url
-                break
-            except Exception as exc:
-                last_error = self._short_error(exc)
+                ): url
+                for url in urls
+            }
+
+            for future in as_completed(list(future_map.keys())):
+                url = future_map[future]
+                try:
+                    response = future.result()
+                    response.raise_for_status()
+                    payload = response.json()
+                    used_url = url
+                    # Best-effort cancellation of remaining request if it hasn't started.
+                    for pending in future_map.keys():
+                        if pending is not future:
+                            pending.cancel()
+                    break
+                except Exception as exc:
+                    err = self._short_error(exc)
+                    if err and err not in errors:
+                        errors.append(err)
 
         if payload is None:
-            result["network_whois_error"] = last_error or "network whois lookup failed"
+            if errors:
+                result["network_whois_error"] = "; ".join(errors[:2])
+            else:
+                result["network_whois_error"] = "network whois lookup failed"
             return result
 
         asn = self._extract_asn(payload)
@@ -946,10 +963,15 @@ class StealthQueryEngine:
         except Exception as exc:
             return {"url": target, "header_error": self._short_error(exc), "tor_routed": bool(proxies)}
 
-    def run_all(self, target: str) -> dict[str, Any]:
-        return self.run_all_staged(target)
+    def run_all(self, target: str, include_headers: bool = True) -> dict[str, Any]:
+        return self.run_all_staged(target, include_headers=include_headers)
 
-    def run_all_staged(self, target: str, on_update: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+    def run_all_staged(
+        self,
+        target: str,
+        on_update: Callable[[dict[str, Any]], None] | None = None,
+        include_headers: bool = True,
+    ) -> dict[str, Any]:
         def emit(snapshot: dict[str, Any]) -> None:
             if not on_update:
                 return
@@ -996,7 +1018,7 @@ class StealthQueryEngine:
             dns_future = pool.submit(self.dns_lookup, dns_target) if not self._is_ip(dns_target) else None
             mx_future = pool.submit(self.mx_lookup, whois_target or dns_target) if not self._is_ip(whois_target or dns_target) else None
             whois_future = pool.submit(self.whois_lookup, whois_target) if whois_target else None
-            header_future = pool.submit(self.header_inspect, target)
+            header_future = pool.submit(self.header_inspect, target) if include_headers else None
             network_future = pool.submit(self.network_whois_lookup, {}, network_ip) if network_ip else None
             address_future = (
                 pool.submit(self.address_lookup, lookup_target, self._empty_dns_payload(lookup_target))
@@ -1011,12 +1033,16 @@ class StealthQueryEngine:
                 future_map[mx_future] = "mx"
             if whois_future:
                 future_map[whois_future] = "whois"
-            future_map[header_future] = "headers"
+            if header_future:
+                future_map[header_future] = "headers"
             if network_future:
                 future_map[network_future] = "network_whois"
             if address_future:
                 future_map[address_future] = "address"
 
+            if not header_future:
+                out["headers"] = {"url": target, "skipped": True}
+                emit(out)
             if not dns_future:
                 out["dns"] = self._empty_dns_payload(dns_target)
                 emit(out)
@@ -1056,7 +1082,10 @@ class StealthQueryEngine:
         dns_data = out.get("dns", self._empty_dns_payload(dns_target))
         mx_data = out.get("mx", {"domain": dns_target, "mx": []})
         whois_data = out.get("whois", {"whois_error": "unable to derive domain for whois from IP target"})
-        headers_data = out.get("headers", {"url": target, "tor_routed": self.config.route_mode == "stealth"})
+        headers_data = out.get(
+            "headers",
+            {"url": target, "skipped": True} if not include_headers else {"url": target, "tor_routed": self.config.route_mode == "stealth"},
+        )
 
         if is_ip:
             try:
