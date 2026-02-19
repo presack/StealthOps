@@ -166,6 +166,7 @@ def build_app(
 
         whois_record = str(whois_data.get("domain_whois_record", "")).strip()
         whois_error = compact_notice(whois_data.get("whois_error", ""))
+        whois_warning = compact_notice(whois_data.get("whois_warning", ""))
         network_whois_record = str(network_whois_data.get("network_whois_record", "")).strip()
         network_notice = compact_notice(
             network_whois_data.get("network_whois_warning")
@@ -295,6 +296,8 @@ def build_app(
             whois_panel_html = render_pre_block(whois_record, compact=True)
         elif whois_error:
             whois_panel_html = "<p class='text-slate-300 text-sm'>No WHOIS record returned.</p>"
+        elif whois_warning:
+            whois_panel_html = "<p class='text-slate-300 text-sm'>Attempting WHOIS lookup...</p>"
         else:
             whois_panel_html = "<p class='text-slate-400 text-sm'>Awaiting data...</p>"
 
@@ -318,6 +321,7 @@ def build_app(
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>
   <h3 class='font-semibold mb-2' title='{whois_cmd}'>Domain Whois summary</h3>
   <div class='min-h-[4rem]'>
+    {("<p class='text-amber-300 text-xs mb-2 break-words'>" + html.escape(whois_warning) + "</p>") if whois_warning else ""}
     {("<p class='text-amber-300 text-xs mb-2 break-words'>" + html.escape(whois_error) + "</p>") if whois_error and not whois_missing_domain else ""}
     {whois_panel_html}
   </div>

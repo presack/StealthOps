@@ -24,6 +24,8 @@ RDAP_TIMEOUT_SECONDS = 5
 RDAP_DOMAIN_TIMEOUT_SECONDS = 5
 HTTP_TIMEOUT_SECONDS = 10
 WHOIS_TIMEOUT_SECONDS = 8
+WHOIS_RETRY_MAX_ATTEMPTS = 3
+WHOIS_RETRY_DELAY_SECONDS = 0.7
 NETWORK_WHOIS_BUDGET_SECONDS = 3.0
 NETWORK_WHOIS_CACHE_TTL_SECONDS = 300.0
 
@@ -113,6 +115,21 @@ class StealthQueryEngine:
         if len(line) > max_len:
             return line[: max_len - 3].rstrip() + "..."
         return line
+
+    @staticmethod
+    def _is_transient_whois_error(value: Any) -> bool:
+        text = str(value or "").lower()
+        markers = (
+            "connection reset by peer",
+            "connection aborted",
+            "timed out",
+            "timeout",
+            "temporary failure",
+            "connection refused",
+            "try again",
+            "network is unreachable",
+        )
+        return any(marker in text for marker in markers)
 
     @staticmethod
     def _is_ip(value: str) -> bool:
@@ -578,7 +595,11 @@ class StealthQueryEngine:
 
         return result
 
-    def whois_lookup(self, domain: str) -> dict[str, Any]:
+    def whois_lookup(
+        self,
+        domain: str,
+        on_retry: Callable[[int, int, str], None] | None = None,
+    ) -> dict[str, Any]:
         # Prefer RDAP (HTTPS) for cloud reliability; fall back to classic WHOIS (port 43).
         whois_domain = self._guess_domain_from_host(domain) if domain and not self._is_ip(domain) else domain
         rdap_first = self._domain_rdap_lookup(whois_domain)
@@ -586,13 +607,34 @@ class StealthQueryEngine:
             return rdap_first
 
         # python-whois does not support SOCKS directly; this remains best-effort.
-        try:
-            data = whois.whois(whois_domain, timeout=WHOIS_TIMEOUT_SECONDS)
-        except Exception as exc:
+        data = None
+        last_exc: Exception | None = None
+        for attempt in range(1, WHOIS_RETRY_MAX_ATTEMPTS + 1):
+            try:
+                data = whois.whois(whois_domain, timeout=WHOIS_TIMEOUT_SECONDS)
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= WHOIS_RETRY_MAX_ATTEMPTS or not self._is_transient_whois_error(exc):
+                    break
+                if on_retry:
+                    try:
+                        on_retry(attempt + 1, WHOIS_RETRY_MAX_ATTEMPTS, self._short_error(exc))
+                    except Exception:
+                        pass
+                delay = WHOIS_RETRY_DELAY_SECONDS * attempt
+                try:
+                    import time
+
+                    time.sleep(delay)
+                except Exception:
+                    pass
+
+        if data is None:
             rdap_fallback = self._domain_rdap_lookup(whois_domain)
             if rdap_fallback:
                 return rdap_fallback
-            return {"domain": whois_domain, "whois_error": self._short_error(exc)}
+            return {"domain": whois_domain, "whois_error": self._short_error(last_exc or "whois lookup failed")}
 
         normalized = {}
         raw_chunks: list[str] = []
@@ -1136,7 +1178,20 @@ class StealthQueryEngine:
         with ThreadPoolExecutor(max_workers=4) as pool:
             dns_future = pool.submit(self.dns_lookup, dns_target) if not self._is_ip(dns_target) else None
             mx_future = pool.submit(self.mx_lookup, whois_target or dns_target) if not self._is_ip(whois_target or dns_target) else None
-            whois_future = pool.submit(self.whois_lookup, whois_target) if whois_target else None
+
+            def on_whois_retry(next_attempt: int, total_attempts: int, reason: str) -> None:
+                retry_snapshot = dict(out)
+                retry_snapshot["whois"] = {
+                    "domain": whois_target,
+                    "whois_warning": f"Retrying... ({next_attempt}/{total_attempts}) after: {reason}",
+                }
+                emit(retry_snapshot)
+
+            whois_future = (
+                pool.submit(self.whois_lookup, whois_target, on_retry=on_whois_retry)
+                if whois_target
+                else None
+            )
             header_future = pool.submit(self.header_inspect, target) if include_headers else None
             network_future = pool.submit(self.network_whois_lookup, {}, network_ip) if network_ip else None
             address_future = (
