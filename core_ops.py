@@ -579,14 +579,20 @@ class StealthQueryEngine:
         return result
 
     def whois_lookup(self, domain: str) -> dict[str, Any]:
+        # Prefer RDAP (HTTPS) for cloud reliability; fall back to classic WHOIS (port 43).
+        whois_domain = self._guess_domain_from_host(domain) if domain and not self._is_ip(domain) else domain
+        rdap_first = self._domain_rdap_lookup(whois_domain)
+        if rdap_first:
+            return rdap_first
+
         # python-whois does not support SOCKS directly; this remains best-effort.
         try:
-            data = whois.whois(domain, timeout=WHOIS_TIMEOUT_SECONDS)
+            data = whois.whois(whois_domain, timeout=WHOIS_TIMEOUT_SECONDS)
         except Exception as exc:
-            rdap_fallback = self._domain_rdap_lookup(domain)
+            rdap_fallback = self._domain_rdap_lookup(whois_domain)
             if rdap_fallback:
                 return rdap_fallback
-            return {"domain": domain, "whois_error": self._short_error(exc)}
+            return {"domain": whois_domain, "whois_error": self._short_error(exc)}
 
         normalized = {}
         raw_chunks: list[str] = []
@@ -623,8 +629,20 @@ class StealthQueryEngine:
                 normalized["status"] = sorted(set(compact))
         if raw_chunks:
             normalized["raw_whois"] = "\n\n".join(raw_chunks)
-        normalized["domain_whois_record"] = self._build_domain_whois_record(normalized, domain)
-        normalized["domain"] = domain
+        normalized["domain_whois_record"] = self._build_domain_whois_record(normalized, whois_domain)
+        normalized["domain"] = whois_domain
+
+        # If classic WHOIS returned essentially empty data, retry RDAP fallback.
+        has_material = bool(
+            str(normalized.get("domain_whois_record", "")).strip()
+            or normalized.get("domain_name")
+            or normalized.get("name_servers")
+            or normalized.get("status")
+        )
+        if not has_material:
+            rdap_fallback = self._domain_rdap_lookup(whois_domain)
+            if rdap_fallback:
+                return rdap_fallback
         return normalized
 
     @staticmethod
