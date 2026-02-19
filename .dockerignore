@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+dist
+build
+vendor
+*.spec
+.tor_data
+README.md
+LICENSE
+*.ps1
+

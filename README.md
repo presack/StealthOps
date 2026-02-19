@@ -257,6 +257,103 @@ New-Item -ItemType Directory -Force .\vendor\tor | Out-Null
 Copy-Item "C:\Program Files\Tor Browser\Browser\TorBrowser\Tor\*" .\vendor\tor -Recurse -Force
 ```
 
+## Linux Build
+
+Build Linux artifacts on a Linux machine (or Linux VM/WSL):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install pyinstaller
+pyinstaller --onefile --name stealthops --collect-data whois --collect-submodules uvicorn --collect-submodules fastapi --collect-submodules starlette main.py
+```
+
+Output:
+
+- `dist/stealthops`
+
+Run:
+
+```bash
+./dist/stealthops --web --host 0.0.0.0 --port 5000
+```
+
+Note: Tor managed update flow is currently Windows-manifest oriented. On Linux, prefer system Tor (`--prefer-system-tor`) or set `TOR_PATH`.
+
+## Cloud Deployment (Web App)
+
+This repo now includes:
+
+- `Dockerfile`
+- `deploy/gcp.sh`
+- `deploy/azure.sh`
+
+No separate repo is required.
+
+### Option A: Google Cloud Run (easy + free tier available)
+
+Prereqs:
+
+- `gcloud` CLI installed
+- Logged in: `gcloud auth login`
+- Billing-enabled GCP project
+
+Deploy:
+
+```bash
+bash deploy/gcp.sh <PROJECT_ID> us-central1 stealthops
+```
+
+Example:
+
+```bash
+bash deploy/gcp.sh my-project-123 us-central1 stealthops
+```
+
+The script:
+
+1. Enables required APIs
+2. Builds the container with Cloud Build
+3. Deploys to Cloud Run
+4. Prints your service URL
+
+### Option B: Azure Container Apps (easy managed container)
+
+Prereqs:
+
+- `az` CLI installed
+- Logged in: `az login`
+- Active subscription selected
+
+Deploy:
+
+```bash
+bash deploy/azure.sh <RESOURCE_GROUP> eastus stealthops stealthops-env
+```
+
+Example:
+
+```bash
+bash deploy/azure.sh rg-stealthops eastus stealthops stealthops-env
+```
+
+The script:
+
+1. Installs/updates Container Apps CLI extension
+2. Registers required Azure providers
+3. Creates/updates the resource group
+4. Builds/deploys app from current source
+5. Prints your app FQDN
+
+### Updating after code changes
+
+Run the same deploy command again. It rebuilds and rolls out the new version.
+
+### Cost note
+
+Cloud Run and Azure Container Apps both have free allowances, but not guaranteed to be fully free for all workloads. Monitor usage and set budgets/alerts.
+
 ## Privacy Notes
 
 - In stealth mode, DNS/MX attempts are Tor-first via DoH when Tor is verified.
