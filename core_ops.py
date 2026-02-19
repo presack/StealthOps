@@ -1168,6 +1168,68 @@ class StealthQueryEngine:
     def header_inspect(self, url: str) -> dict[str, Any]:
         target = url if url.startswith(("http://", "https://")) else f"https://{url}"
         proxies = self._proxies()
+        tor_routed = bool(proxies)
+
+        try:
+            parsed = urlparse(target)
+            if parsed.scheme not in {"http", "https"}:
+                return {
+                    "url": target,
+                    "header_error": "unsupported URL scheme for header inspection",
+                    "tor_routed": tor_routed,
+                }
+            host = str(parsed.hostname or "").strip()
+            if not host:
+                return {"url": target, "header_error": "invalid URL host", "tor_routed": tor_routed}
+            if host.lower() == "localhost" or host.endswith(".local"):
+                return {
+                    "url": target,
+                    "header_error": "blocked: local hostnames are not allowed",
+                    "tor_routed": tor_routed,
+                }
+
+            resolved_ips: set[str] = set()
+            try:
+                addr_info = socket.getaddrinfo(host, None)
+                for entry in addr_info:
+                    if len(entry) >= 5 and isinstance(entry[4], tuple) and entry[4]:
+                        resolved_ips.add(str(entry[4][0]))
+            except OSError:
+                # If DNS resolution fails here, allow requests.get to return the canonical error.
+                pass
+
+            def blocked_ip_reason(value: str) -> str | None:
+                try:
+                    ip_obj = ipaddress.ip_address(value)
+                except ValueError:
+                    return None
+                if ip_obj.is_loopback:
+                    return "blocked: loopback targets are not allowed"
+                if ip_obj.is_private:
+                    return "blocked: private IP targets are not allowed"
+                if ip_obj.is_link_local:
+                    return "blocked: link-local targets are not allowed"
+                if ip_obj.is_multicast:
+                    return "blocked: multicast targets are not allowed"
+                if ip_obj.is_reserved:
+                    return "blocked: reserved IP targets are not allowed"
+                if ip_obj.is_unspecified:
+                    return "blocked: unspecified IP targets are not allowed"
+                if str(ip_obj) in {"169.254.169.254", "100.100.100.200"}:
+                    return "blocked: cloud metadata endpoint targets are not allowed"
+                return None
+
+            host_block = blocked_ip_reason(host)
+            if host_block:
+                return {"url": target, "header_error": host_block, "tor_routed": tor_routed}
+
+            for resolved in resolved_ips:
+                reason = blocked_ip_reason(resolved)
+                if reason:
+                    return {"url": target, "header_error": reason, "tor_routed": tor_routed}
+        except Exception:
+            # Continue and surface canonical request failure below.
+            pass
 
         try:
             response = requests.get(
@@ -1181,10 +1243,10 @@ class StealthQueryEngine:
                 "status_code": response.status_code,
                 "final_url": response.url,
                 "headers": dict(response.headers),
-                "tor_routed": bool(proxies),
+                "tor_routed": tor_routed,
             }
         except Exception as exc:
-            return {"url": target, "header_error": self._short_error(exc), "tor_routed": bool(proxies)}
+            return {"url": target, "header_error": self._short_error(exc), "tor_routed": tor_routed}
 
     def run_all(self, target: str, include_headers: bool = True) -> dict[str, Any]:
         return self.run_all_staged(target, include_headers=include_headers)

@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from core_ops import QueryConfig, StealthQueryEngine, internet_available
@@ -72,6 +72,31 @@ def build_app(
     query_engine = StealthQueryEngine(tor_engine, QueryConfig(block_non_tor=False, route_mode="public"))
     jobs_lock = threading.Lock()
     jobs: dict[str, dict] = {}
+    request_hits: dict[str, list[float]] = {}
+    RATE_LIMIT_WINDOW_SECONDS = 60.0
+    RATE_LIMIT_MAX_REQUESTS = 20
+    MAX_ACTIVE_JOBS = 8
+
+    def client_ip(request: Request) -> str:
+        if request.client and request.client.host:
+            return str(request.client.host)
+        return "unknown"
+
+    def enforce_rate_limit(ip: str) -> str:
+        now = time.time()
+        cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+        with jobs_lock:
+            hits = [ts for ts in request_hits.get(ip, []) if ts >= cutoff]
+            if len(hits) >= RATE_LIMIT_MAX_REQUESTS:
+                request_hits[ip] = hits
+                return "rate limit exceeded; please retry shortly"
+            hits.append(now)
+            request_hits[ip] = hits
+        return ""
+
+    def active_job_count() -> int:
+        with jobs_lock:
+            return sum(1 for job in jobs.values() if not bool(job.get("done")))
 
     def get_tor_ok() -> bool:
         if tor_engine.is_proxy_running():
@@ -372,17 +397,23 @@ def build_app(
         shield_text = "PUBLIC MODE" if route_mode == "public" else ("STEALTH MODE READY" if stealth_ready else "STEALTH MODE UNAVAILABLE")
         warning = ""
         if route_mode == "stealth" and not stealth_ready:
-            warning = f"<p class='text-red-400 text-sm mt-2'>Warning: {tor_engine.last_error or 'Tor unavailable'}.</p>"
+            warning = (
+                "<p class='text-red-400 text-sm mt-2'>Warning: "
+                + html.escape(str(tor_engine.last_error or "Tor unavailable"))
+                + ".</p>"
+            )
         runtime_note = (
-            f"<p class='text-slate-300 text-xs mt-2'>Runtime: {tor_engine.last_update_message}</p>"
+            "<p class='text-slate-300 text-xs mt-2'>Runtime: "
+            + html.escape(str(tor_engine.last_update_message))
+            + "</p>"
             if tor_engine.last_update_message
             else ""
         )
-        notice_html = f"<p class='text-cyan-300 mt-3'>{notice}</p>" if notice else ""
+        notice_html = f"<p class='text-cyan-300 mt-3'>{html.escape(str(notice))}</p>" if notice else ""
 
         result_html = render_results(results, False) if results else ""
 
-        error_html = f"<p class='text-red-400 mt-3'>{error}</p>" if error else ""
+        error_html = f"<p class='text-red-400 mt-3'>{html.escape(str(error))}</p>" if error else ""
         stealth_active = "bg-emerald-600 text-white" if route_mode == "stealth" else "bg-slate-700 text-slate-200"
         public_active = "bg-cyan-600 text-white" if route_mode == "public" else "bg-slate-700 text-slate-200"
         switch_to = "stealth" if route_mode == "public" else "public"
@@ -543,9 +574,21 @@ def build_app(
 
     @app.post("/query", response_class=HTMLResponse)
     async def query(
+        request: Request,
         target: str = Form(...),
         route_mode: str = Form("public"),
     ) -> HTMLResponse:
+        ip = client_ip(request)
+        rate_limit_error = enforce_rate_limit(ip)
+        if rate_limit_error:
+            return HTMLResponse(
+                render_page(
+                    target=target,
+                    route_mode="stealth" if route_mode == "stealth" else "public",
+                    error=rate_limit_error,
+                    update_source=tor_engine.preview_update_source(),
+                )
+            )
         query_engine.config.route_mode = "stealth" if route_mode == "stealth" else "public"
         query_engine.config.block_non_tor = query_engine.config.route_mode == "stealth"
         if query_engine.config.route_mode == "stealth":
@@ -576,9 +619,19 @@ def build_app(
 
     @app.post("/query/start", response_class=JSONResponse)
     async def query_start(
+        request: Request,
         target: str = Form(...),
         route_mode: str = Form("public"),
     ) -> JSONResponse:
+        ip = client_ip(request)
+        rate_limit_error = enforce_rate_limit(ip)
+        if rate_limit_error:
+            return JSONResponse({"error": rate_limit_error, "job_id": ""}, status_code=429)
+        if active_job_count() >= MAX_ACTIVE_JOBS:
+            return JSONResponse(
+                {"error": "server is busy; too many concurrent queries", "job_id": ""},
+                status_code=503,
+            )
         if not internet_available(timeout=1.0):
             return JSONResponse(
                 {
