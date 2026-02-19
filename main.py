@@ -7,6 +7,7 @@ import ctypes
 import json
 import os
 import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -497,21 +498,23 @@ def run_console(args: argparse.Namespace) -> int:
     print("")
     print("Type 'help' for commands.")
     print("")
-    web_server = None
-    web_thread: threading.Thread | None = None
+    web_process: subprocess.Popen | None = None
 
     def shutdown_web_background() -> None:
-        nonlocal web_server, web_thread
-        if not web_server:
+        nonlocal web_process
+        if not web_process:
             return
         try:
-            web_server.should_exit = True
+            if web_process.poll() is None:
+                web_process.terminate()
+                web_process.wait(timeout=2.0)
         except Exception:
-            pass
-        if web_thread and web_thread.is_alive():
-            web_thread.join(timeout=2.0)
-        web_server = None
-        web_thread = None
+            try:
+                if web_process.poll() is None:
+                    web_process.kill()
+            except Exception:
+                pass
+        web_process = None
 
     while True:
         try:
@@ -583,7 +586,7 @@ def run_console(args: argparse.Namespace) -> int:
                 print("usage: web [host] [port]")
                 print("")
                 continue
-            if web_thread and web_thread.is_alive():
+            if web_process and web_process.poll() is None:
                 print("web server already running in background")
                 print("")
                 continue
@@ -591,7 +594,9 @@ def run_console(args: argparse.Namespace) -> int:
                 print("[notice] internet connectivity check failed; web UI will start but queries may fail until connectivity returns")
             print(f"Starting web server in background on {host}:{port}")
             print("")
-            web_server, web_thread = run_web_background(args, host_override=host, port_override=port)
+            web_process = run_web_background(args, host_override=host, port_override=port)
+            print(f"[web] pid={web_process.pid} url=http://{host}:{port}")
+            print("")
             continue
         if cmd == "banner":
             print(_render_console_banner(query_engine, tor_engine, tor_ok, emit_json, use_color))
@@ -697,24 +702,27 @@ def run_web_background(
     args: argparse.Namespace,
     host_override: str | None = None,
     port_override: int | None = None,
-) -> tuple[object, threading.Thread]:
-    try:
-        import uvicorn
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "Web mode requires uvicorn. Rebuild with dependencies installed (python -m pip install -r requirements.txt)."
-        ) from exc
+) -> subprocess.Popen:
+    host = host_override or args.host
+    port = str(port_override or args.port)
+    tor_update = args.tor_update
 
-    app = build_app(
-        tor_update_mode=args.tor_update,
-        tor_update_manifest=args.tor_update_manifest,
-        prefer_system_tor=args.prefer_system_tor,
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--web", "--host", host, "--port", port, "--tor-update", tor_update]
+    else:
+        cmd = [sys.executable, os.path.abspath(__file__), "--web", "--host", host, "--port", port, "--tor-update", tor_update]
+
+    if args.tor_update_manifest:
+        cmd.extend(["--tor-update-manifest", args.tor_update_manifest])
+    if args.prefer_system_tor:
+        cmd.append("--prefer-system-tor")
+
+    return subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
-    config = uvicorn.Config(app, host=host_override or args.host, port=port_override or args.port)
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    return server, thread
 
 
 def main() -> int:
