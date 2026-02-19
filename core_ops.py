@@ -773,6 +773,14 @@ class StealthQueryEngine:
         }
         if self._is_ip(domain):
             result["addresses"] = [domain]
+            special_context = self._special_ip_context(domain)
+            if special_context:
+                class_name, rfc_ref = special_context
+                result["canonical_name"] = domain
+                result["address_lookup_error"] = (
+                    f"reverse lookup unavailable for {class_name} ({rfc_ref})"
+                )
+                return result
             try:
                 reverse_name = ".".join(reversed(domain.split("."))) + ".in-addr.arpa"
                 ptr_values = (
@@ -1198,6 +1206,38 @@ class StealthQueryEngine:
         lookup_target = self._normalize_lookup_target(target)
         is_ip = self._is_ip(lookup_target)
         out: dict[str, Any] = {}
+
+        # Short-circuit special-purpose IPs before resolver/WHOIS work.
+        if is_ip:
+            special_context = self._special_ip_context(lookup_target)
+            if special_context:
+                class_name, rfc_ref = special_context
+                address_data = {
+                    "query": lookup_target,
+                    "canonical_name": lookup_target,
+                    "aliases": [],
+                    "addresses": [lookup_target],
+                    "address_lookup_error": f"reverse lookup unavailable for {class_name} ({rfc_ref})",
+                }
+                dns_data = self._empty_dns_payload(lookup_target)
+                whois_data = {"whois_error": f"WHOIS unavailable for {class_name} ({rfc_ref})"}
+                mx_data = {"domain": lookup_target, "mx": []}
+                network_whois_data = self.network_whois_lookup({}, ip_override=lookup_target)
+                headers_data = (
+                    self.header_inspect(lookup_target)
+                    if include_headers
+                    else {"url": target, "skipped": True}
+                )
+                final = {
+                    "address": address_data,
+                    "dns": dns_data,
+                    "mx": mx_data,
+                    "whois": whois_data,
+                    "network_whois": network_whois_data,
+                    "headers": headers_data,
+                }
+                emit(final)
+                return final
 
         dns_target = lookup_target
         whois_target = lookup_target

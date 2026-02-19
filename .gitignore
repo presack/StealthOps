@@ -1,4 +1,5 @@
 .venv/
+venv/
 __pycache__/
 *.py[cod]
 *.pyo
@@ -11,3 +12,4 @@ __pycache__/
 dist/
 build/
 *.spec
+pip-wheel-metadata/
