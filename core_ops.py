@@ -1086,6 +1086,38 @@ class StealthQueryEngine:
             pool.shutdown(wait=False, cancel_futures=True)
 
         if payload is None:
+            # Some RDAP providers block/rate-limit Tor exits; retry network WHOIS over public route once.
+            should_public_retry = (
+                bool(proxies)
+                and self.config.route_mode != "public"
+                and any(
+                    marker in "; ".join(errors).lower()
+                    for marker in ("403", "forbidden", "429", "timed out", "timeout")
+                )
+            )
+            if should_public_retry:
+                public_errors: list[str] = []
+                for url in urls:
+                    try:
+                        response = requests.get(
+                            url,
+                            headers={"accept": "application/rdap+json, application/json"},
+                            proxies=None,
+                            timeout=(1.5, RDAP_TIMEOUT_SECONDS),
+                        )
+                        response.raise_for_status()
+                        payload = response.json()
+                        used_url = url
+                        result["network_whois_warning"] = "tor blocked/unavailable for RDAP; public fallback used"
+                        break
+                    except Exception as exc:
+                        err = self._short_error(exc)
+                        if err and err not in public_errors:
+                            public_errors.append(err)
+                if payload is None and public_errors:
+                    errors = errors + public_errors
+
+        if payload is None:
             if errors:
                 result["network_whois_error"] = "; ".join(errors[:2])
             else:
