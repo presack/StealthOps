@@ -13,6 +13,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from core_ops import QueryConfig, StealthQueryEngine, internet_available
+from enrichment import EnrichmentManager, PROVIDER_SPECS, parse_enrichment_selection, selection_to_csv
 from tor_engine import TorEngine
 
 
@@ -70,6 +71,7 @@ def build_app(
         prefer_system_tor=prefer_system_tor,
     )
     query_engine = StealthQueryEngine(tor_engine, QueryConfig(block_non_tor=False, route_mode="public"))
+    enrichment_manager = EnrichmentManager()
     jobs_lock = threading.Lock()
     jobs: dict[str, dict] = {}
     request_hits: dict[str, list[float]] = {}
@@ -162,6 +164,7 @@ def build_app(
         whois_data = results.get("whois", {})
         network_whois_data = results.get("network_whois", {})
         header_data = results.get("headers", {})
+        enrichment_data = results.get("enrichment", {})
 
         address_summary = {
             key: address_data.get(key)
@@ -286,6 +289,266 @@ def build_app(
         if not headers_rows:
             headers_rows = "<tr><td class='py-1 pr-3' colspan='2'>No headers</td></tr>"
 
+        def classify_risk(payload: dict) -> str:
+            risk = str(payload.get("risk_level", "")).strip().lower()
+            if risk in {"high", "medium", "low"}:
+                return risk
+            if "error" in payload:
+                return "unknown"
+            if "abuse_confidence_score" in payload:
+                score = int(payload.get("abuse_confidence_score", 0) or 0)
+                if score >= 75:
+                    return "high"
+                if score >= 25:
+                    return "medium"
+                return "low"
+            if "last_analysis_stats" in payload and isinstance(payload.get("last_analysis_stats"), dict):
+                stats = payload.get("last_analysis_stats", {})
+                malicious = int(stats.get("malicious", 0) or 0)
+                suspicious = int(stats.get("suspicious", 0) or 0)
+                if malicious > 0:
+                    return "high"
+                if suspicious > 0:
+                    return "medium"
+                return "low"
+            return "unknown"
+
+        def risk_chip(level: str) -> str:
+            if level == "high":
+                return "<span class='text-[10px] px-2 py-0.5 rounded-full bg-red-900/40 text-red-300 border border-red-700'>high</span>"
+            if level == "medium":
+                return "<span class='text-[10px] px-2 py-0.5 rounded-full bg-amber-900/40 text-amber-300 border border-amber-700'>medium</span>"
+            if level == "low":
+                return "<span class='text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/40 text-emerald-300 border border-emerald-700'>low</span>"
+            return "<span class='text-[10px] px-2 py-0.5 rounded-full bg-slate-900 text-slate-300 border border-slate-700'>unknown</span>"
+
+        def render_enrichment_value(provider_name: str, field_key: str, value: object) -> str:
+            if value is None or value == "":
+                return "<span class='text-slate-500'>-</span>"
+            if isinstance(value, bool):
+                return "true" if value else "false"
+
+            def render_dict_list_table(dict_list: list[dict], cap: int = 30) -> str:
+                provider_key = provider_name.strip().lower()
+                field_key_l = field_key.strip().lower()
+                provider_specific: dict[tuple[str, str], list[str]] = {
+                    ("virustotal", "malicious_or_suspicious_findings"): ["engine", "category", "result", "method"],
+                    ("urlscan", "recent_scans"): ["time", "domain", "ip", "score", "result_url", "uuid"],
+                    ("securitytrails", "current_ns_records"): ["nameserver", "nameserver_organization", "nameserver_count"],
+                    ("securitytrails", "current_mx_records"): ["priority", "hostname", "hostname_organization"],
+                    ("securitytrails", "current_txt_records"): ["value"],
+                    ("viewdns", "ip_history"): ["ip", "date", "lastseen"],
+                    ("viewdns", "subdomains"): ["name", "subdomain", "ip"],
+                    ("viewdns", "reverseip_domains"): ["domain", "last_resolved"],
+                    ("dnsdumpster", "a"): ["host", "ip", "asn", "asn_name", "country"],
+                    ("dnsdumpster", "ns"): ["host", "ip", "asn", "asn_name", "country"],
+                    ("dnsdumpster", "mx"): ["host", "ip", "asn", "asn_name", "country"],
+                    ("ripestat", "announced_prefixes"): ["prefix", "first_seen", "last_seen", "events"],
+                }
+                preferred = provider_specific.get((provider_key, field_key_l), [
+                    "engine",
+                    "category",
+                    "result",
+                    "command",
+                    "hostname",
+                    "nameserver",
+                    "priority",
+                    "ip",
+                    "domain",
+                    "time",
+                    "score",
+                    "value",
+                    "type",
+                    "port",
+                    "protocol",
+                    "service",
+                    "error",
+                ])
+                keys_seen: list[str] = []
+                for item in dict_list:
+                    for key in item.keys():
+                        if isinstance(key, str) and key not in keys_seen:
+                            keys_seen.append(key)
+                ordered = [k for k in preferred if k in keys_seen]
+                extras = sorted([k for k in keys_seen if k not in ordered])
+                columns = (ordered + extras)[:6]
+                if not columns:
+                    return "<span class='text-slate-500'>-</span>"
+
+                preview = dict_list[:cap]
+                body_rows = []
+                for item in preview:
+                    cells: list[str] = []
+                    for col in columns:
+                        raw = item.get(col, "-")
+                        if col == "category":
+                            category = str(raw).strip().lower()
+                            if category == "malicious":
+                                cell = "<span class='text-red-300'>malicious</span>"
+                            elif category == "suspicious":
+                                cell = "<span class='text-amber-300'>suspicious</span>"
+                            else:
+                                cell = html.escape(str(raw))
+                        else:
+                            cell = html.escape(str(raw))
+                        cells.append(f"<td class='py-1 align-top break-all'>{cell}</td>")
+                    body_rows.append(
+                        "<tr>"
+                        + "".join(cells)
+                        + "</tr>"
+                    )
+                more = ""
+                if len(dict_list) > len(preview):
+                    more = (
+                        "<p class='text-slate-500 text-[11px] mt-1'>"
+                        f"... (+{len(dict_list) - len(preview)} more)"
+                        "</p>"
+                    )
+                header_cells = "".join(
+                    f"<th class='text-left py-1 pr-3 text-slate-400'>{html.escape(str(col))}</th>"
+                    for col in columns
+                )
+                return (
+                    "<div class='overflow-x-auto'>"
+                    "<table class='w-full text-xs'>"
+                    "<thead><tr>" + header_cells + "</tr></thead>"
+                    f"<tbody>{''.join(body_rows)}</tbody>"
+                    "</table>"
+                    + more
+                    + "</div>"
+                )
+
+            if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
+                return render_dict_list_table(value)
+            if isinstance(value, dict):
+                keys = sorted(value.keys())
+                rows = []
+                for key in keys[:8]:
+                    rows.append(
+                        "<div class='flex gap-2'>"
+                        f"<span class='text-slate-400'>{html.escape(str(key))}:</span>"
+                        f"<span class='text-slate-100 break-all'>{html.escape(str(value.get(key)))}</span>"
+                        "</div>"
+                    )
+                if len(keys) > 8:
+                    rows.append(f"<div class='text-slate-500'>... (+{len(keys) - 8} more)</div>")
+                return "<div class='space-y-1'>" + "".join(rows) + "</div>"
+            if isinstance(value, list):
+                if not value:
+                    return "<span class='text-slate-500'>-</span>"
+                preview = value[:12]
+                items = []
+                for entry in preview:
+                    items.append(f"<li class='break-all'>{html.escape(str(entry))}</li>")
+                tail = ""
+                if len(value) > len(preview):
+                    tail = f"<li class='text-slate-500'>... (+{len(value) - len(preview)} more)</li>"
+                return "<ul class='list-disc ml-4 space-y-1'>" + "".join(items) + tail + "</ul>"
+            return html.escape(str(value))
+
+        enrichment_html = ""
+        if enrichment_data.get("enabled"):
+            providers = enrichment_data.get("providers", {})
+            skipped = enrichment_data.get("skipped", [])
+            risk_counts = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
+            for _, payload in providers.items():
+                level = classify_risk(payload if isinstance(payload, dict) else {})
+                risk_counts[level] = risk_counts.get(level, 0) + 1
+
+            tab_buttons: list[str] = []
+            tab_panels: list[str] = []
+            tab_buttons.append(
+                "<button type='button' data-enrich-tab-btn='consensus' "
+                "class='px-3 py-1.5 text-xs rounded-md border border-cyan-600 bg-cyan-900/40 text-cyan-200'>Consensus</button>"
+            )
+            selection_text = ", ".join(enrichment_data.get("selection", []) or ["-"])
+            resolved_text = ", ".join(enrichment_data.get("resolved", []) or ["-"])
+            skipped_lines = ""
+            if skipped:
+                skipped_lines = (
+                    "<div class='mt-2 space-y-1'>"
+                    + "".join(
+                        "<p class='text-xs text-amber-300'>Skipped "
+                        + html.escape(str(item.get("provider", "-")))
+                        + ": "
+                        + html.escape(str(item.get("reason", "-")))
+                        + "</p>"
+                        for item in skipped
+                    )
+                    + "</div>"
+                )
+            tab_panels.append(
+                "<div data-enrich-tab-panel='consensus'>"
+                "<div class='grid grid-cols-2 md:grid-cols-4 gap-2 text-xs'>"
+                f"<div class='rounded-md border border-red-700 bg-red-900/30 p-2'><p class='text-red-300'>high</p><p class='text-lg font-semibold'>{risk_counts.get('high', 0)}</p></div>"
+                f"<div class='rounded-md border border-amber-700 bg-amber-900/30 p-2'><p class='text-amber-300'>medium</p><p class='text-lg font-semibold'>{risk_counts.get('medium', 0)}</p></div>"
+                f"<div class='rounded-md border border-emerald-700 bg-emerald-900/30 p-2'><p class='text-emerald-300'>low</p><p class='text-lg font-semibold'>{risk_counts.get('low', 0)}</p></div>"
+                f"<div class='rounded-md border border-slate-700 bg-slate-900/60 p-2'><p class='text-slate-300'>unknown</p><p class='text-lg font-semibold'>{risk_counts.get('unknown', 0)}</p></div>"
+                "</div>"
+                "<div class='mt-3 text-xs text-slate-300'>"
+                f"<p><span class='text-slate-400'>Selection:</span> {html.escape(selection_text)}</p>"
+                f"<p><span class='text-slate-400'>Resolved:</span> {html.escape(resolved_text)}</p>"
+                "</div>"
+                + skipped_lines
+                + "</div>"
+            )
+
+            for provider in sorted(providers.keys()):
+                payload = providers.get(provider, {})
+                risk = classify_risk(payload if isinstance(payload, dict) else {})
+                tab_buttons.append(
+                    "<button type='button' "
+                    f"data-enrich-tab-btn='{html.escape(provider)}' "
+                    "class='px-3 py-1.5 text-xs rounded-md border border-slate-700 bg-slate-900/60 text-slate-200'>"
+                    + html.escape(provider)
+                    + "</button>"
+                )
+                rows = []
+                if isinstance(payload, dict):
+                    for key in sorted(payload.keys()):
+                        if key.startswith("_"):
+                            continue
+                        value = payload.get(key)
+                        if value in (None, "", []):
+                            continue
+                        rows.append(
+                            "<tr>"
+                            f"<td class='py-1.5 pr-3 align-top text-slate-400 whitespace-nowrap'>{html.escape(str(key))}</td>"
+                            "<td class='py-1.5 align-top text-slate-100 text-xs'>"
+                            + render_enrichment_value(provider, str(key), value)
+                            + "</td>"
+                            "</tr>"
+                        )
+                panel_body = (
+                    "<table class='w-full text-xs'><tbody>" + "".join(rows) + "</tbody></table>"
+                    if rows
+                    else "<p class='text-xs text-slate-400'>No data returned.</p>"
+                )
+                tab_panels.append(
+                    "<div data-enrich-tab-panel='"
+                    + html.escape(provider)
+                    + "' class='hidden'>"
+                    "<div class='flex items-center gap-2 mb-2'>"
+                    f"<p class='text-sm font-semibold'>{html.escape(provider)}</p>{risk_chip(risk)}"
+                    "</div>"
+                    "<div class='p-3 rounded-lg bg-slate-900/60 border border-slate-700'>"
+                    + panel_body
+                    + "</div></div>"
+                )
+
+            enrichment_html = (
+                "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>"
+                "<h3 class='font-semibold mb-2'>Enrichment Workspace</h3>"
+                "<p class='text-xs text-slate-400 mb-3'>Use tabs to inspect provider output without scrolling through one long block.</p>"
+                "<div data-enrich-tabs class='space-y-3'>"
+                "<div class='flex flex-wrap gap-2'>"
+                + "".join(tab_buttons)
+                + "</div>"
+                "<div class='space-y-3'>"
+                + "".join(tab_panels)
+                + "</div></div></section>"
+            )
+
         json_panel = ""
         if show_json:
             json_panel = (
@@ -381,8 +644,27 @@ def build_app(
     <tbody>{headers_rows}</tbody>
   </table>
 </section>
+{enrichment_html}
 {json_panel}
 """
+
+    def render_enrichment_pending(enrich_selection: str) -> str:
+        selected = parse_enrichment_selection(enrich_selection)
+        if not selected:
+            return ""
+        selected_text = ", ".join(selected)
+        return (
+            "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>"
+            "<h3 class='font-semibold mb-2'>Enrichment Workspace</h3>"
+            "<p class='text-xs text-slate-400 mb-2'>Selection: "
+            + html.escape(selected_text)
+            + "</p>"
+            "<div class='rounded-lg border border-cyan-700/60 bg-cyan-900/20 p-3'>"
+            "<p class='text-cyan-200 text-sm'>Gathering enrichment data...</p>"
+            "<p class='text-slate-400 text-xs mt-1'>Provider API calls can complete after the base lookup sections.</p>"
+            "</div>"
+            "</section>"
+        )
 
     def render_page(
         results: dict | None = None,
@@ -391,6 +673,7 @@ def build_app(
         error: str = "",
         notice: str = "",
         update_source: str = "",
+        enrich_selection: str = "off",
     ) -> str:
         stealth_ready = get_tor_ok()
         shield_class = "bg-cyan-600" if route_mode == "public" else ("bg-emerald-600" if stealth_ready else "bg-red-600")
@@ -437,6 +720,82 @@ def build_app(
 """
         run_button_label = "Run Query (Stealth)" if route_mode == "stealth" else "Run Query (Public)"
         run_button_class = "bg-emerald-600 hover:bg-emerald-500" if route_mode == "stealth" else "bg-cyan-600 hover:bg-cyan-500"
+        parsed_selection = parse_enrichment_selection(enrich_selection)
+        all_enabled_selected = parsed_selection == ["all-enabled"]
+        selected_enrich = set(parsed_selection)
+        providers = enrichment_manager.provider_status()
+        grouped_rows: dict[str, list[str]] = {"ip": [], "domain": [], "mixed": []}
+        for name in sorted(PROVIDER_SPECS.keys()):
+            item = providers.get(name, {})
+            has_key = bool(item.get("has_key"))
+            adapter_ready = bool(item.get("adapter_ready"))
+            usage = item.get("usage", {})
+            target_types = [str(t) for t in item.get("target_types", [])]
+            target_set = set(target_types)
+            checked = "checked" if (all_enabled_selected and has_key and adapter_ready) or (name in selected_enrich) else ""
+            disabled = "" if has_key and adapter_ready else "disabled"
+            target_attr = " ".join(target_types)
+            chip_class = (
+                "border-emerald-500 bg-emerald-900/30 text-emerald-200"
+                if has_key and adapter_ready
+                else ("border-amber-500 bg-amber-900/20 text-amber-200" if has_key else "border-slate-700 bg-slate-900/50 text-slate-400")
+            )
+            label = (
+                "<label data-provider-chip='1' class='inline-flex items-center gap-2 px-2 py-1 rounded-md border transition "
+                + chip_class
+                + "'>"
+                + f"<input type='checkbox' name='enrich' value='{html.escape(name)}' {checked} {disabled} data-target-types='{html.escape(target_attr)}' class='accent-cyan-500' />"
+                + f"<span class='text-xs'>{html.escape(name)}</span>"
+                + "<span class='text-[10px] opacity-80'>"
+                + html.escape(f"a:{usage.get('attempts',0)} ok:{usage.get('success',0)} err:{usage.get('errors',0)}")
+                + "</span></label>"
+            )
+            if target_set == {"ip"}:
+                grouped_rows["ip"].append(label)
+            elif "ip" in target_set and ("domain" in target_set or "url" in target_set):
+                grouped_rows["mixed"].append(label)
+            else:
+                grouped_rows["domain"].append(label)
+
+        def render_group(title: str, key: str, action: str = "", action_label: str = "") -> str:
+            rows = grouped_rows.get(key, [])
+            if not rows:
+                return ""
+            action_html = ""
+            if action:
+                action_html = (
+                    f"<button type='button' data-enrich-action='{html.escape(action)}' "
+                    "class='px-2 py-1 rounded-md border border-cyan-700 bg-cyan-900/20 text-xs text-cyan-200 hover:bg-cyan-900/35'>"
+                    + html.escape(action_label or title)
+                    + "</button>"
+                )
+            return (
+                "<div class='mt-3'>"
+                f"<p class='text-[11px] uppercase tracking-wide text-slate-400 mb-1'>{html.escape(title)}</p>"
+                "<div class='flex flex-wrap gap-2'>"
+                + action_html
+                + "".join(rows)
+                + "</div></div>"
+            )
+
+        provider_strip = (
+            "<div class='mt-2'>"
+            "<p class='text-xs text-slate-400 mb-2'>Optional enrichment providers (ready providers are selectable).</p>"
+            + render_group(
+                "IP-focused providers",
+                "ip",
+                "ip-plus-cross",
+                "Select IP-focused enrichments",
+            )
+            + render_group(
+                "Domain-focused providers",
+                "domain",
+                "domain-plus-cross",
+                "Select domain-focused enrichments",
+            )
+            + render_group("Cross-target providers", "mixed")
+            + "</div>"
+        )
 
         return f"""
 <!doctype html>
@@ -474,6 +833,7 @@ def build_app(
           <label class='block text-sm mb-1'>Domain or URL</label>
           <input name='target' value='{html.escape(target)}' required class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2' />
         </div>
+        {provider_strip}
         <input type='hidden' name='route_mode' value='{html.escape(route_mode)}' />
         <div class='flex gap-3'>
           <button class='px-4 py-2 rounded-lg font-semibold text-white {run_button_class}'>{html.escape(run_button_label)}</button>
@@ -496,6 +856,83 @@ def build_app(
       const panel = document.getElementById('results-panel');
       if (!form || !panel) return;
 
+      function initEnrichmentTabs(root) {{
+        const scope = root || document;
+        const groups = scope.querySelectorAll('[data-enrich-tabs]');
+        groups.forEach(function(group) {{
+          const buttons = Array.from(group.querySelectorAll('[data-enrich-tab-btn]'));
+          const panels = Array.from(group.querySelectorAll('[data-enrich-tab-panel]'));
+          if (!buttons.length || !panels.length) return;
+
+          function activate(name) {{
+            buttons.forEach(function(btn) {{
+              const active = btn.getAttribute('data-enrich-tab-btn') === name;
+              if (active) {{
+                btn.classList.remove('border-slate-700', 'bg-slate-900/60', 'text-slate-200');
+                btn.classList.add('border-cyan-600', 'bg-cyan-900/40', 'text-cyan-200');
+              }} else {{
+                btn.classList.remove('border-cyan-600', 'bg-cyan-900/40', 'text-cyan-200');
+                btn.classList.add('border-slate-700', 'bg-slate-900/60', 'text-slate-200');
+              }}
+            }});
+            panels.forEach(function(p) {{
+              const show = p.getAttribute('data-enrich-tab-panel') === name;
+              p.classList.toggle('hidden', !show);
+            }});
+          }}
+
+          let active = '';
+          buttons.forEach(function(btn) {{
+            btn.addEventListener('click', function() {{
+              const name = btn.getAttribute('data-enrich-tab-btn') || '';
+              activate(name);
+            }});
+            if (!active) active = btn.getAttribute('data-enrich-tab-btn') || '';
+          }});
+          if (active) activate(active);
+        }});
+      }}
+
+      function initEnrichmentControls() {{
+        const actions = Array.from(form.querySelectorAll('[data-enrich-action]'));
+        const providerChecks = Array.from(form.querySelectorAll('input[name="enrich"]'));
+        if (!providerChecks.length) return;
+
+        function setCheckedByFilter(filterFn) {{
+          providerChecks.forEach(function(input) {{
+            if (input.hasAttribute('data-static-disabled')) {{
+              input.checked = false;
+              return;
+            }}
+            input.checked = !!filterFn(input);
+          }});
+        }}
+
+        providerChecks.forEach(function(input) {{
+          if (input.disabled) {{
+            input.setAttribute('data-static-disabled', '1');
+          }}
+        }});
+        actions.forEach(function(btn) {{
+          btn.addEventListener('click', function() {{
+            const action = btn.getAttribute('data-enrich-action');
+            if (action === 'ip-plus-cross') {{
+              setCheckedByFilter(function(input) {{
+                const types = (input.getAttribute('data-target-types') || '').split(' ');
+                return types.includes('ip');
+              }});
+              return;
+            }}
+            if (action === 'domain-plus-cross') {{
+              setCheckedByFilter(function(input) {{
+                const types = (input.getAttribute('data-target-types') || '').split(' ');
+                return types.includes('domain') || types.includes('url');
+              }});
+            }}
+          }});
+        }});
+      }}
+
       async function pollJob(jobId) {{
         while (true) {{
           const res = await fetch(`/query/status/${{jobId}}`);
@@ -506,6 +943,7 @@ def build_app(
           const data = await res.json();
           if (typeof data.html === 'string') {{
             panel.innerHTML = data.html;
+            initEnrichmentTabs(panel);
           }}
           if (data.done) {{
             return;
@@ -516,10 +954,17 @@ def build_app(
 
       form.addEventListener('submit', async function(ev) {{
         ev.preventDefault();
+        const selectedEnrich = Array.from(form.querySelectorAll('input[name="enrich"]:checked')).map(function(i) {{ return i.value; }});
+        const pendingEnrichment = selectedEnrich.length
+          ? "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Enrichment Workspace</h3><p class='text-xs text-slate-400 mb-2'>Selection: "
+            + selectedEnrich.join(", ")
+            + "</p><div class='rounded-lg border border-cyan-700/60 bg-cyan-900/20 p-3'><p class='text-cyan-200 text-sm'>Gathering enrichment data...</p><p class='text-slate-400 text-xs mt-1'>Provider API calls can complete after the base lookup sections.</p></div></section>"
+          : "";
         panel.innerHTML = ""
           + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-6'><h3 class='font-semibold mb-2'>Address lookup</h3><div class='min-h-[9rem] text-slate-400 text-sm'>Collecting...</div></section>"
           + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Domain Whois summary</h3><div class='min-h-[18rem] text-slate-400 text-sm'>Collecting...</div></section>"
-          + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Network Whois record</h3><div class='min-h-[12rem] text-slate-400 text-sm'>Collecting...</div></section>";
+          + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Network Whois record</h3><div class='min-h-[12rem] text-slate-400 text-sm'>Collecting...</div></section>"
+          + pendingEnrichment;
         const body = new FormData(form);
         const res = await fetch('/query/start', {{ method: 'POST', body }});
         if (!res.ok) {{
@@ -538,6 +983,9 @@ def build_app(
         }}
         pollJob(data.job_id);
       }});
+
+      initEnrichmentTabs(document);
+      initEnrichmentControls();
     }})();
   </script>
 </body>
@@ -550,6 +998,7 @@ def build_app(
             render_page(
                 route_mode=query_engine.config.route_mode,
                 update_source=tor_engine.preview_update_source(),
+                enrich_selection="off",
             )
         )
 
@@ -569,6 +1018,7 @@ def build_app(
                 route_mode=selected,
                 notice=notice,
                 update_source=tor_engine.preview_update_source(),
+                enrich_selection="off",
             )
         )
 
@@ -578,6 +1028,10 @@ def build_app(
         target: str = Form(...),
         route_mode: str = Form("public"),
     ) -> HTMLResponse:
+        form = await request.form()
+        enrich_all = str(form.get("enrich_all", "")).strip().lower() in {"1", "true", "on", "yes"}
+        enrich_values = [str(v) for v in form.getlist("enrich")]
+        enrich_selection = "all-enabled" if enrich_all else selection_to_csv(enrich_values)
         ip = client_ip(request)
         rate_limit_error = enforce_rate_limit(ip)
         if rate_limit_error:
@@ -587,6 +1041,7 @@ def build_app(
                     route_mode="stealth" if route_mode == "stealth" else "public",
                     error=rate_limit_error,
                     update_source=tor_engine.preview_update_source(),
+                    enrich_selection=enrich_selection,
                 )
             )
         query_engine.config.route_mode = "stealth" if route_mode == "stealth" else "public"
@@ -595,6 +1050,8 @@ def build_app(
             tor_engine.ensure_tor()
         try:
             results = query_engine.run_all(target.strip())
+            if parse_enrichment_selection(enrich_selection):
+                results["enrichment"] = enrichment_manager.run(target.strip(), enrich_selection)
             notice = ""
             if query_engine.config.route_mode == "stealth" and not tor_engine.verify_circuit():
                 notice = f"Stealth mode selected, but Tor is not verified: {tor_engine.last_error or 'unknown error'}"
@@ -605,6 +1062,7 @@ def build_app(
                     route_mode=query_engine.config.route_mode,
                     notice=notice,
                     update_source=tor_engine.preview_update_source(),
+                    enrich_selection=enrich_selection,
                 )
             )
         except Exception as exc:
@@ -614,6 +1072,7 @@ def build_app(
                     route_mode=query_engine.config.route_mode,
                     error=str(exc),
                     update_source=tor_engine.preview_update_source(),
+                    enrich_selection=enrich_selection,
                 )
             )
 
@@ -623,6 +1082,10 @@ def build_app(
         target: str = Form(...),
         route_mode: str = Form("public"),
     ) -> JSONResponse:
+        form = await request.form()
+        enrich_all = str(form.get("enrich_all", "")).strip().lower() in {"1", "true", "on", "yes"}
+        enrich_values = [str(v) for v in form.getlist("enrich")]
+        enrich_selection = "all-enabled" if enrich_all else selection_to_csv(enrich_values)
         ip = client_ip(request)
         rate_limit_error = enforce_rate_limit(ip)
         if rate_limit_error:
@@ -651,6 +1114,7 @@ def build_app(
                 "results": {},
                 "target": target_value,
                 "route_mode": selected_mode,
+                "enrich_selection": enrich_selection,
                 "updated_at": time.time(),
             }
 
@@ -674,6 +1138,8 @@ def build_app(
 
             try:
                 final = local_engine.run_all_staged(target_value, on_update=on_update)
+                if parse_enrichment_selection(enrich_selection):
+                    final["enrichment"] = enrichment_manager.run(target_value, enrich_selection)
                 with jobs_lock:
                     if job_id in jobs:
                         jobs[job_id]["results"] = final
@@ -698,14 +1164,23 @@ def build_app(
             results = job.get("results", {})
             done = bool(job.get("done"))
             error = str(job.get("error") or "")
+            enrich_selection = str(job.get("enrich_selection") or "off")
 
         html_fragment = ""
         if error:
             html_fragment = f"<p class='text-red-400'>{html.escape(error)}</p>"
         elif results:
             html_fragment = render_results(results, False)
+            enrichment_ready = bool(
+                isinstance(results, dict)
+                and isinstance(results.get("enrichment"), dict)
+                and results.get("enrichment", {}).get("enabled")
+            )
+            if parse_enrichment_selection(enrich_selection) and not enrichment_ready:
+                html_fragment += render_enrichment_pending(enrich_selection)
         else:
             html_fragment = "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><p class='text-slate-300'>Collecting results...</p></section>"
+            html_fragment += render_enrichment_pending(enrich_selection)
 
         return JSONResponse({"done": done, "error": error, "html": html_fragment})
 

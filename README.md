@@ -117,6 +117,47 @@ Default CLI output is formatted for readability. Use raw JSON when needed:
 python main.py example.com --json
 ```
 
+Optional enrichment providers (API key required via environment variables):
+
+```powershell
+python main.py example.com --enrich virustotal
+python main.py 8.8.8.8 --enrich all-enabled
+python main.py 8.8.8.8 --enrich shodan --enrich-only
+python main.py --providers
+```
+
+Current adapter coverage:
+
+- `virustotal`, `shodan`, `spur`, `censys`, `viewdns`, `mxtoolbox`, `abuseipdb`, `greynoise`, `dnsdumpster`, `urlscan`, `securitytrails`: implemented
+
+Environment variable examples:
+
+```powershell
+$env:VIRUSTOTAL_API_KEY="..."
+$env:SHODAN_API_KEY="..."
+$env:SPUR_API_KEY="..."
+$env:CENSYS_API_KEY="..."
+# optional legacy fallback:
+$env:CENSYS_API_ID="..."
+$env:CENSYS_API_SECRET="..."
+$env:VIEWDNS_API_KEY="..."
+$env:MXTOOLBOX_API_KEY="..."
+$env:ABUSEIPDB_API_KEY="..."
+$env:GREYNOISE_API_KEY="..."
+$env:DNSDUMPSTER_API_KEY="..."
+$env:URLSCAN_API_KEY="..."
+$env:SECURITYTRAILS_API_KEY="..."
+```
+
+Optional urlscan behavior:
+
+```powershell
+$env:URLSCAN_SUBMIT_ON_MISS="1"   # only for URL targets; submits unlisted scan when search has no results
+$env:URLSCAN_MAX_RESULTS="50"     # 1..100 search results per request
+```
+
+In web mode, enrichment providers appear as optional checkboxes above the Run Query button.
+
 Force strict privacy behavior:
 
 ```powershell
@@ -182,6 +223,13 @@ Console commands:
 - `query <target>`
 - `<target>` (shorthand query)
 - `!<target>` (forced shorthand query)
+- `providers`
+- `quota`
+- `enrich <off|all-enabled|csv>`
+- `vt <target>` (enrichment-only shortcut)
+- `shodan <target>` (enrichment-only shortcut)
+- `spur <target>` (enrichment-only shortcut)
+- `censys <target>`
 - `mode <stealth|public>`
 - `tor install`
 - `tor status`
