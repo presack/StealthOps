@@ -120,23 +120,39 @@ class EnrichmentManager:
         }
 
     @staticmethod
-    def _load_keys() -> dict[str, str]:
-        out: dict[str, str] = {}
+    def _split_env_values(raw: str) -> list[str]:
+        values: list[str] = []
+        for item in str(raw or "").split(","):
+            candidate = item.strip()
+            if candidate and candidate not in values:
+                values.append(candidate)
+        return values
+
+    @staticmethod
+    def _env_flag(name: str, default: bool = False) -> bool:
+        value = str(os.environ.get(name, "")).strip().lower()
+        if not value:
+            return default
+        return value in {"1", "true", "yes", "on"}
+
+    @classmethod
+    def _load_keys(cls) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
         for name, spec in PROVIDER_SPECS.items():
             if name == "censys":
                 api_key = str(os.environ.get("CENSYS_API_KEY", "")).strip()
                 api_id = str(os.environ.get("CENSYS_API_ID", "")).strip()
                 api_secret = str(os.environ.get("CENSYS_API_SECRET", "")).strip()
                 if api_key:
-                    out[name] = f"pat:{api_key}"
+                    out[name] = [f"pat:{value}" for value in cls._split_env_values(api_key)]
                 elif api_id and api_secret:
                     # Compatibility fallback for older keypairs.
-                    out[name] = f"basic:{api_id}:{api_secret}"
+                    out[name] = [f"basic:{api_id}:{api_secret}"]
                 continue
             for env_name in spec.env_vars:
-                value = str(os.environ.get(env_name, "")).strip()
-                if value:
-                    out[name] = value
+                values = cls._split_env_values(os.environ.get(env_name, ""))
+                if values:
+                    out[name] = values
                     break
         return out
 
@@ -252,12 +268,12 @@ class EnrichmentManager:
                     }
                 )
                 continue
-            key = self._keys.get(provider, "")
-            if self._provider_requires_key(provider) and not key:
+            keys = self._keys.get(provider, [])
+            if self._provider_requires_key(provider) and not keys:
                 out["skipped"].append({"provider": provider, "reason": "missing_api_key"})
                 continue
             try:
-                payload = self._run_provider(provider, target, key)
+                payload = self._run_provider_with_fallback(provider, target, keys)
                 payload = self._with_summary(provider, payload)
                 out["providers"][provider] = payload
                 self._record_usage(provider, error=bool(payload.get("error")))
@@ -283,7 +299,7 @@ class EnrichmentManager:
     def _provider_accessible(self, provider: str) -> bool:
         if not self._provider_requires_key(provider):
             return True
-        return provider in self._keys
+        return bool(self._keys.get(provider))
 
     def _with_summary(self, provider: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
@@ -413,6 +429,52 @@ class EnrichmentManager:
         if handler:
             return handler(target, key)
         return {"error": "adapter_not_implemented"}
+
+    @staticmethod
+    def _should_retry_with_next_key(error_text: str) -> bool:
+        text = str(error_text or "").strip().lower()
+        if not text:
+            return False
+        retry_markers = (
+            "http 401",
+            "http 403",
+            "http 429",
+            "unauthorized",
+            "forbidden",
+            "invalid api",
+            "invalid key",
+            "bad api key",
+            "rate limit",
+            "quota",
+            "credits",
+            "key exhausted",
+            "account limit",
+        )
+        return any(marker in text for marker in retry_markers)
+
+    def _run_provider_with_fallback(self, provider: str, target: str, keys: list[str]) -> dict[str, Any]:
+        if not self._provider_requires_key(provider):
+            return self._run_provider(provider, target, "")
+
+        candidates = keys or [""]
+        errors: list[str] = []
+        for index, key in enumerate(candidates):
+            payload = self._run_provider(provider, target, key)
+            error_text = str(payload.get("error") or "").strip()
+            if not error_text:
+                if index > 0:
+                    payload["key_fallback_used"] = True
+                    payload["key_attempts"] = index + 1
+                return payload
+            errors.append(error_text)
+            if index >= len(candidates) - 1 or not self._should_retry_with_next_key(error_text):
+                if index > 0:
+                    payload["key_fallback_used"] = True
+                    payload["key_attempts"] = index + 1
+                    payload["key_errors"] = errors
+                return payload
+
+        return {"error": errors[-1] if errors else "missing_api_key"}
 
     @staticmethod
     def _classify_target(target: str) -> tuple[str, str]:
@@ -1205,6 +1267,25 @@ class EnrichmentManager:
                     out["reverseip_domains"] = domains
                     out["reverseip_domain_count"] = len(domains)
 
+            spam_payload, spam_error = self._viewdns_get("spamdblookup", {"host": normalized}, api_key)
+            if not spam_error and isinstance(spam_payload, dict):
+                spam_rows = self._viewdns_extract_rows(spam_payload, ("spams", "spamdb", "records", "entries"))
+                out["spam_db_listed"] = bool(spam_rows)
+                if spam_rows:
+                    out["spam_db_hits"] = spam_rows
+                    out["spam_db_hit_count"] = len(spam_rows)
+            elif spam_error:
+                out["spam_db_error"] = spam_error
+
+            abuse_payload, abuse_error = self._viewdns_get("abuselookup", {"domain": normalized}, api_key)
+            if not abuse_error and isinstance(abuse_payload, dict):
+                contacts = self._viewdns_extract_contact_emails(abuse_payload)
+                if contacts:
+                    out["abuse_contacts"] = contacts
+                    out["abuse_contact_count"] = len(contacts)
+            elif abuse_error:
+                out["abuse_contact_error"] = abuse_error
+
             return out
 
         domain = normalized if target_type == "domain" else self._extract_domain_from_url(normalized)
@@ -1235,8 +1316,17 @@ class EnrichmentManager:
                     "updated_date": reg.get("standardUpdatedDate") or reg.get("updatedDate") if isinstance(reg, dict) else None,
                     "expires_date": reg.get("standardExpiresDate") or reg.get("expiresDate") if isinstance(reg, dict) else None,
                     "abuse_email": reg.get("abuseEmail") if isinstance(reg, dict) else None,
+                    "registrant_name": self._viewdns_pick_value(node, reg, keys=("registrantName", "registrant_name", "name")),
+                    "registrant_organization": self._viewdns_pick_value(node, reg, keys=("registrantOrganization", "registrant_organization", "organization")),
+                    "registrant_email": self._viewdns_pick_value(node, reg, keys=("registrantEmail", "registrant_email", "email")),
                 }
             )
+
+        dnsrecord_payload, dnsrecord_error = self._viewdns_get("dnsrecord", {"domain": domain}, api_key)
+        if not dnsrecord_error and isinstance(dnsrecord_payload, dict):
+            out.update(self._viewdns_extract_dns_records(dnsrecord_payload))
+        elif dnsrecord_error:
+            out["dnsrecord_error"] = dnsrecord_error
 
         sub_payload, sub_error = self._viewdns_get("subdomains", {"domain": domain}, api_key)
         if not sub_error and isinstance(sub_payload, dict):
@@ -1265,20 +1355,93 @@ class EnrichmentManager:
         elif rev_error:
             out["reverseip_error"] = rev_error
 
+        spam_payload, spam_error = self._viewdns_get("spamdblookup", {"host": domain}, api_key)
+        if not spam_error and isinstance(spam_payload, dict):
+            spam_rows = self._viewdns_extract_rows(spam_payload, ("spams", "spamdb", "records", "entries"))
+            out["spam_db_listed"] = bool(spam_rows)
+            if spam_rows:
+                out["spam_db_hits"] = spam_rows
+                out["spam_db_hit_count"] = len(spam_rows)
+        elif spam_error:
+            out["spam_db_error"] = spam_error
+
+        abuse_payload, abuse_error = self._viewdns_get("abuselookup", {"domain": domain}, api_key)
+        if not abuse_error and isinstance(abuse_payload, dict):
+            contacts = self._viewdns_extract_contact_emails(abuse_payload)
+            if contacts:
+                out["abuse_contacts"] = contacts
+                out["abuse_contact_count"] = len(contacts)
+        elif abuse_error:
+            out["abuse_contact_error"] = abuse_error
+
+        if self._env_flag("VIEWDNS_ENABLE_PIVOTS", default=False):
+            mx_hosts = [str(v).strip() for v in out.get("mx_records", []) if str(v).strip()]
+            if mx_hosts:
+                reverse_mx_rows: list[dict[str, Any]] = []
+                for host in mx_hosts[:3]:
+                    mx_payload, mx_error = self._viewdns_get("reversemx", {"mx": host}, api_key)
+                    if mx_error:
+                        continue
+                    for row in self._viewdns_extract_domains_with_context(mx_payload, "mx", host):
+                        if row not in reverse_mx_rows:
+                            reverse_mx_rows.append(row)
+                if reverse_mx_rows:
+                    out["reverse_mx_domains"] = reverse_mx_rows
+                    out["reverse_mx_domain_count"] = len(reverse_mx_rows)
+
+            ns_hosts = [str(v).strip() for v in out.get("ns_records", []) if str(v).strip()]
+            if ns_hosts:
+                reverse_ns_rows: list[dict[str, Any]] = []
+                for host in ns_hosts[:3]:
+                    ns_payload, ns_error = self._viewdns_get("reversens", {"ns": host}, api_key)
+                    if ns_error:
+                        continue
+                    for row in self._viewdns_extract_domains_with_context(ns_payload, "ns", host):
+                        if row not in reverse_ns_rows:
+                            reverse_ns_rows.append(row)
+                if reverse_ns_rows:
+                    out["reverse_ns_domains"] = reverse_ns_rows
+                    out["reverse_ns_domain_count"] = len(reverse_ns_rows)
+
+            reverse_whois_query = (
+                str(out.get("registrant_email") or "").strip()
+                or str(out.get("abuse_email") or "").strip()
+                or str(out.get("registrant_organization") or "").strip()
+                or str(out.get("registrant_name") or "").strip()
+            )
+            if reverse_whois_query:
+                rw_payload, rw_error = self._viewdns_get("reversewhois", {"q": reverse_whois_query}, api_key)
+                if not rw_error and isinstance(rw_payload, dict):
+                    rw_rows = self._viewdns_extract_domains_with_context(rw_payload, "query", reverse_whois_query)
+                    if rw_rows:
+                        out["reverse_whois_query"] = reverse_whois_query
+                        out["reverse_whois_domains"] = rw_rows
+                        out["reverse_whois_domain_count"] = len(rw_rows)
+                elif rw_error:
+                    out["reverse_whois_error"] = rw_error
+        else:
+            out["pivot_lookups_skipped"] = True
+
         return out
 
     def _viewdns_get(self, endpoint: str, params: dict[str, Any], api_key: str) -> tuple[dict[str, Any], str]:
         query = {"apikey": api_key, "output": "json"}
         query.update(params)
-        response = requests.get(
-            f"https://api.viewdns.info/{endpoint}/",
-            params=query,
-            headers={"accept": "application/json"},
-            timeout=ENRICHMENT_TIMEOUT_SECONDS,
-        )
+        try:
+            response = requests.get(
+                f"https://api.viewdns.info/{endpoint}/",
+                params=query,
+                headers={"accept": "application/json"},
+                timeout=ENRICHMENT_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as exc:
+            return {}, f"{endpoint}: {exc}"
         if response.status_code >= 400:
             return {}, self._short_http_error(response)
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError:
+            return {}, f"{endpoint}: unexpected_non_json_response"
         if not isinstance(payload, dict):
             return {}, "unexpected_non_json_response"
         if payload.get("error"):
@@ -1410,6 +1573,110 @@ class EnrichmentManager:
                     out.append(value)
         return out
 
+    @staticmethod
+    def _viewdns_pick_value(*sources: object, keys: tuple[str, ...]) -> str | None:
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            for key in keys:
+                value = source.get(key)
+                if isinstance(value, dict):
+                    for nested_key in ("value", "name", "organization", "email"):
+                        nested = str(value.get(nested_key) or "").strip()
+                        if nested:
+                            return nested
+                text = str(value or "").strip()
+                if text:
+                    return text
+        return None
+
+    @staticmethod
+    def _viewdns_extract_rows(payload: dict[str, Any], keys: tuple[str, ...]) -> list[dict[str, Any]]:
+        response_node = payload.get("response", {})
+        if not isinstance(response_node, dict):
+            return []
+        for key in keys:
+            rows = response_node.get(key)
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+        return []
+
+    @classmethod
+    def _viewdns_extract_contact_emails(cls, payload: dict[str, Any]) -> list[str]:
+        rows = cls._viewdns_extract_rows(payload, ("contacts", "abusecontacts", "abuse_contacts", "records"))
+        out: list[str] = []
+        for row in rows:
+            for key in ("email", "contact", "abuse_contact", "abuse_email"):
+                value = str(row.get(key) or "").strip()
+                if value and value not in out:
+                    out.append(value)
+        response_node = payload.get("response", {})
+        if isinstance(response_node, dict):
+            direct_contact = str(response_node.get("abusecontact") or "").strip()
+            if direct_contact and direct_contact not in out:
+                out.append(direct_contact)
+            for key in ("email", "abuse_contact", "abuse_email"):
+                value = str(response_node.get(key) or "").strip()
+                if value and value not in out:
+                    out.append(value)
+        return out
+
+    @classmethod
+    def _viewdns_extract_domains_with_context(cls, payload: dict[str, Any], label: str, label_value: str) -> list[dict[str, Any]]:
+        rows = cls._viewdns_extract_rows(payload, ("domains", "records", "results"))
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            domain = str(row.get("name") or row.get("domain") or "").strip()
+            if not domain:
+                continue
+            entry: dict[str, Any] = {"domain": domain, label: label_value}
+            last_resolved = str(row.get("last_resolved") or row.get("lastseen") or row.get("date") or "").strip()
+            if last_resolved:
+                entry["last_resolved"] = last_resolved
+            if entry not in out:
+                out.append(entry)
+        return out
+
+    @staticmethod
+    def _viewdns_extract_dns_records(payload: dict[str, Any]) -> dict[str, Any]:
+        response_node = payload.get("response", {})
+        records = response_node.get("records", []) if isinstance(response_node, dict) else []
+        if not isinstance(records, list):
+            return {}
+
+        a_records: list[str] = []
+        ns_records: list[str] = []
+        mx_records: list[str] = []
+        txt_records: list[str] = []
+        for row in records:
+            if not isinstance(row, dict):
+                continue
+            record_type = str(row.get("type") or "").strip().upper()
+            value = str(row.get("data") or row.get("value") or "").strip()
+            if not value:
+                continue
+            if record_type == "A" and value not in a_records:
+                a_records.append(value)
+            elif record_type == "NS":
+                ns_host = value.rstrip(".")
+                if ns_host and ns_host not in ns_records:
+                    ns_records.append(ns_host)
+            elif record_type == "MX":
+                parts = value.split()
+                mx_host = (parts[-1] if parts else value).rstrip(".")
+                if mx_host and mx_host not in mx_records:
+                    mx_records.append(mx_host)
+            elif record_type == "TXT" and value not in txt_records:
+                txt_records.append(value)
+
+        return {
+            "record_count": len(records),
+            "a_records": a_records[:8],
+            "ns_records": ns_records[:8],
+            "mx_records": mx_records[:8],
+            "txt_records": txt_records[:8],
+        }
+
     def _viewdns_domain_dnsrecord_fallback(self, domain: str, api_key: str, target_type: str) -> dict[str, Any] | None:
         response = requests.get(
             "https://api.viewdns.info/dnsrecord/",
@@ -1420,22 +1687,14 @@ class EnrichmentManager:
         if response.status_code >= 400:
             return None
         payload = response.json()
-        node = payload.get("response", {}) if isinstance(payload, dict) else {}
-        records = node.get("records", []) if isinstance(node, dict) else []
-        if not isinstance(records, list):
-            records = []
-        record_count = len(records)
-        ns_records = [r.get("data") for r in records if isinstance(r, dict) and str(r.get("type", "")).upper() == "NS" and r.get("data")]
-        a_records = [r.get("data") for r in records if isinstance(r, dict) and str(r.get("type", "")).upper() == "A" and r.get("data")]
-        return {
+        out = {
             "source": "viewdns",
             "target_type": target_type,
             "domain": domain,
             "fallback_used": "dnsrecord",
-            "record_count": record_count,
-            "a_records": a_records[:8],
-            "ns_records": ns_records[:8],
         }
+        out.update(self._viewdns_extract_dns_records(payload))
+        return out
 
     def _run_mxtoolbox(self, target: str, api_key: str) -> dict[str, Any]:
         target_type, normalized = self._classify_target(target)

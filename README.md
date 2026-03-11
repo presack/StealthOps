@@ -149,6 +149,19 @@ $env:URLSCAN_API_KEY="..."
 $env:SECURITYTRAILS_API_KEY="..."
 ```
 
+Single-token providers accept comma-separated keys in one environment variable. StealthOps will try the next key when a request fails with auth or rate-limit style errors.
+
+```powershell
+$env:VIEWDNS_API_KEY="key_one,key_two"
+$env:SHODAN_API_KEY="key_one,key_two"
+```
+
+Optional ViewDNS deep pivots are disabled by default to keep normal lookups responsive. Enable them only when you want the extra reverse MX / reverse NS / reverse WHOIS fan-out.
+
+```powershell
+$env:VIEWDNS_ENABLE_PIVOTS="1"
+```
+
 Optional urlscan behavior:
 
 ```powershell

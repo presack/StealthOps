@@ -494,6 +494,10 @@ def format_enrichment_report(enrichment_data: dict) -> str:
             ("viewdns", "ip_history"): ["ip", "date", "lastseen"],
             ("viewdns", "subdomains"): ["name", "subdomain", "ip"],
             ("viewdns", "reverseip_domains"): ["domain", "last_resolved"],
+            ("viewdns", "reverse_mx_domains"): ["mx", "domain", "last_resolved"],
+            ("viewdns", "reverse_ns_domains"): ["ns", "domain", "last_resolved"],
+            ("viewdns", "reverse_whois_domains"): ["query", "domain", "last_resolved"],
+            ("viewdns", "spam_db_hits"): ["name", "host", "ip", "lastseen", "type"],
             ("dnsdumpster", "a"): ["host", "ip", "asn", "asn_name", "country"],
             ("dnsdumpster", "ns"): ["host", "ip", "asn", "asn_name", "country"],
             ("dnsdumpster", "mx"): ["host", "ip", "asn", "asn_name", "country"],
@@ -1043,6 +1047,19 @@ def format_enrichment_report(enrichment_data: dict) -> str:
             "subdomain_count",
             "ip_history_count",
             "reverseip_domain_count",
+            "reverse_mx_domain_count",
+            "reverse_ns_domain_count",
+            "reverse_whois_query",
+            "reverse_whois_domain_count",
+            "registrant_name",
+            "registrant_organization",
+            "registrant_email",
+            "abuse_contact_count",
+            "spam_db_hit_count",
+            "spam_db_listed",
+            "pivot_lookups_skipped",
+            "key_fallback_used",
+            "key_attempts",
         ):
             value = payload.get(key)
             if value in (None, "", []):
@@ -1051,16 +1068,31 @@ def format_enrichment_report(enrichment_data: dict) -> str:
         for key, label, cap in (
             ("a_records", "a_records", 20),
             ("ns_records", "ns_records", 20),
+            ("mx_records", "mx_records", 20),
             ("txt_records", "txt_records", 20),
             ("subdomains", "subdomains", 40),
             ("ip_history", "ip_history", 25),
             ("reverseip_domains", "reverseip_domains", 25),
+            ("reverse_mx_domains", "reverse_mx_domains", 25),
+            ("reverse_ns_domains", "reverse_ns_domains", 25),
+            ("reverse_whois_domains", "reverse_whois_domains", 25),
             ("reverse_dns_hostnames", "reverse_dns_hostnames", 20),
+            ("abuse_contacts", "abuse_contacts", 15),
+            ("key_errors", "key_errors", 10),
+            ("spam_db_hits", "spam_db_hits", 20),
         ):
             value = payload.get(key)
             if isinstance(value, list) and value:
                 render_list_field(lines, label, value, cap=cap, provider=provider)
-        for key in ("subdomains_error", "ip_history_error", "reverseip_error"):
+        for key in (
+            "subdomains_error",
+            "ip_history_error",
+            "reverseip_error",
+            "dnsrecord_error",
+            "abuse_contact_error",
+            "spam_db_error",
+            "reverse_whois_error",
+        ):
             value = payload.get(key)
             if value:
                 lines.append(f"- {key}: {value}")
