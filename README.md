@@ -128,7 +128,7 @@ python main.py --providers
 
 Current adapter coverage:
 
-- `virustotal`, `shodan`, `spur`, `censys`, `viewdns`, `mxtoolbox`, `abuseipdb`, `greynoise`, `dnsdumpster`, `urlscan`, `securitytrails`: implemented
+- `virustotal`, `shodan`, `spur`, `censys`, `viewdns`, `mxtoolbox`, `abuseipdb`, `greynoise`, `dnsdumpster`, `dnsdb`, `urlscan`, `securitytrails`: implemented
 
 Environment variable examples:
 
@@ -145,8 +145,18 @@ $env:MXTOOLBOX_API_KEY="..."
 $env:ABUSEIPDB_API_KEY="..."
 $env:GREYNOISE_API_KEY="..."
 $env:DNSDUMPSTER_API_KEY="..."
+$env:DNSDB_API_KEY="..."
+$env:DNSDB_API_ROOT="https://api.dnsdb.info/dnsdb/v2"
 $env:URLSCAN_API_KEY="..."
 $env:SECURITYTRAILS_API_KEY="..."
+```
+
+Optional DNSDB behavior:
+
+```powershell
+$env:DNSDB_API_ROOT="https://api.dnsdb.info/dnsdb/v2"   # or your provider-specific lookup root
+$env:DNSDB_RRSET_LIMIT="25"                             # apex/domain rrset samples
+$env:DNSDB_SUBDOMAIN_LIMIT="60"                         # wildcard subdomain / inverse IP samples
 ```
 
 Single-token providers accept comma-separated keys in one environment variable. StealthOps will try the next key when a request fails with auth or rate-limit style errors.
@@ -243,6 +253,7 @@ Console commands:
 - `shodan <target>` (enrichment-only shortcut)
 - `spur <target>` (enrichment-only shortcut)
 - `censys <target>`
+- `dnsdb <target>`
 - `mode <stealth|public>`
 - `tor install`
 - `tor status`

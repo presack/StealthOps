@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import json
 import os
 import threading
 import time
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -36,6 +37,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "abuseipdb": ProviderSpec("abuseipdb", "AbuseIPDB", ("ABUSEIPDB_API_KEY",), True, ("ip",)),
     "greynoise": ProviderSpec("greynoise", "GreyNoise", ("GREYNOISE_API_KEY",), True, ("ip", "asn")),
     "dnsdumpster": ProviderSpec("dnsdumpster", "DNSDumpster", ("DNSDUMPSTER_API_KEY",), True, ("domain", "url")),
+    "dnsdb": ProviderSpec("dnsdb", "DNSDB", ("DNSDB_API_KEY",), True, ("ip", "domain", "url")),
     "urlscan": ProviderSpec("urlscan", "urlscan.io", ("URLSCAN_API_KEY",), True, ("ip", "domain", "url")),
     "securitytrails": ProviderSpec("securitytrails", "SecurityTrails", ("SECURITYTRAILS_API_KEY",), True, ("domain", "url")),
     "spamhaus": ProviderSpec("spamhaus", "Spamhaus ASN-DROP", (), True, ("asn",)),
@@ -60,6 +62,8 @@ PROVIDER_ALIASES: dict[str, str] = {
     "gn": "greynoise",
     "dnsdumpster": "dnsdumpster",
     "dd": "dnsdumpster",
+    "dnsdb": "dnsdb",
+    "ddb": "dnsdb",
     "urlscan": "urlscan",
     "us": "urlscan",
     "securitytrails": "securitytrails",
@@ -367,6 +371,16 @@ class EnrichmentManager:
             total = payload.get("total_a_recs") or payload.get("a_count") or 0
             payload["summary"] = f"dnsdumpster domain={domain} a_records={total}"
             return payload
+        if provider == "dnsdb":
+            if str(payload.get("target_type")) == "ip":
+                ip = payload.get("ip") or "-"
+                count = payload.get("rrname_count") or 0
+                payload["summary"] = f"dnsdb ip={ip} rrnames={count}"
+                return payload
+            domain = payload.get("domain") or "-"
+            sub_count = payload.get("subdomain_count") or 0
+            payload["summary"] = f"dnsdb domain={domain} subdomains={sub_count}"
+            return payload
         if provider == "urlscan":
             count = payload.get("result_count") or 0
             risk = payload.get("risk_level", "low")
@@ -420,6 +434,7 @@ class EnrichmentManager:
             "abuseipdb": self._run_abuseipdb,
             "greynoise": self._run_greynoise,
             "dnsdumpster": self._run_dnsdumpster,
+            "dnsdb": self._run_dnsdb,
             "urlscan": self._run_urlscan,
             "securitytrails": self._run_securitytrails,
             "spamhaus": self._run_spamhaus,
@@ -2172,6 +2187,242 @@ class EnrichmentManager:
             "txt_records": txt_values,
             "result_keys": sorted(data.keys()),
         }
+
+    @staticmethod
+    def _dnsdb_limit(name: str, default: int, minimum: int = 1, maximum: int = 500) -> int:
+        raw = str(os.environ.get(name, "")).strip()
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+        except Exception:
+            return default
+        return max(minimum, min(maximum, value))
+
+    @staticmethod
+    def _dnsdb_timestamp(value: object) -> str | None:
+        try:
+            ts = int(value)
+            return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%SZ")
+        except Exception:
+            text = str(value or "").strip()
+            return text or None
+
+    @staticmethod
+    def _dnsdb_root_config() -> tuple[str, str]:
+        raw = (
+            str(os.environ.get("DNSDB_API_ROOT", "")).strip()
+            or str(os.environ.get("DNSDB_BASE_URL", "")).strip()
+            or "https://api.dnsdb.info/dnsdb/v2"
+        )
+        raw = raw.rstrip("/")
+        lower = raw.lower()
+        if "/dnsdb/v2" in lower:
+            idx = lower.index("/dnsdb/v2") + len("/dnsdb/v2")
+            return raw[:idx], "v2"
+        if lower.endswith("/lookup_api"):
+            return raw[: -len("/lookup_api")], "legacy"
+        return raw, "legacy"
+
+    @classmethod
+    def _dnsdb_lookup_url(cls, section: str, mode_key: str, value: str, rrtype: str = "ANY") -> tuple[str, str]:
+        root, api_mode = cls._dnsdb_root_config()
+        safe_value = quote(str(value or "").strip(), safe="*._:-/")
+        url = f"{root.rstrip('/')}/lookup/{section}/{mode_key}/{safe_value}/{rrtype}"
+        return url, api_mode
+
+    @staticmethod
+    def _dnsdb_parse_response(response: requests.Response) -> tuple[list[dict[str, Any]], str]:
+        body = str(response.text or "").strip()
+        if not body:
+            return [], ""
+        try:
+            payload = json.loads(body)
+            if isinstance(payload, list):
+                return [row for row in payload if isinstance(row, dict)], ""
+            if isinstance(payload, dict):
+                if isinstance(payload.get("results"), list):
+                    return [row for row in payload.get("results", []) if isinstance(row, dict)], ""
+                return [payload], ""
+        except Exception:
+            pass
+
+        rows: list[dict[str, Any]] = []
+        for line in body.splitlines():
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                item = json.loads(text)
+            except Exception:
+                return [], "unexpected_non_json_response"
+            if isinstance(item, dict):
+                rows.append(item)
+        return rows, ""
+
+    def _dnsdb_lookup(self, section: str, mode_key: str, value: str, api_key: str, limit: int) -> tuple[list[dict[str, Any]], str, str]:
+        url, api_mode = self._dnsdb_lookup_url(section, mode_key, value)
+        try:
+            response = requests.get(
+                url,
+                headers={
+                    "accept": "application/x-ndjson, application/json;q=0.9",
+                    "X-API-Key": api_key,
+                },
+                params={"limit": limit},
+                timeout=ENRICHMENT_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as exc:
+            return [], str(exc), api_mode
+        if response.status_code >= 400:
+            return [], self._short_http_error(response), api_mode
+        rows, parse_error = self._dnsdb_parse_response(response)
+        return rows, parse_error, api_mode
+
+    @classmethod
+    def _dnsdb_row_preview(cls, row: dict[str, Any]) -> dict[str, Any]:
+        rdata_values = row.get("rdata", [])
+        if not isinstance(rdata_values, list):
+            rdata_values = [rdata_values] if rdata_values not in (None, "") else []
+        preview_values = [str(v).strip() for v in rdata_values if str(v).strip()]
+        rdata_preview = ", ".join(preview_values[:3])
+        if len(preview_values) > 3:
+            rdata_preview += f" ... (+{len(preview_values)-3} more)"
+        out: dict[str, Any] = {
+            "rrname": str(row.get("rrname") or row.get("owner") or "").strip(),
+            "rrtype": str(row.get("rrtype") or row.get("type") or "").strip(),
+            "rdata": rdata_preview,
+        }
+        count = row.get("count")
+        if count not in (None, ""):
+            out["count"] = count
+        first_seen = cls._dnsdb_timestamp(row.get("time_first"))
+        last_seen = cls._dnsdb_timestamp(row.get("time_last"))
+        if first_seen:
+            out["first_seen"] = first_seen
+        if last_seen:
+            out["last_seen"] = last_seen
+        bailiwick = str(row.get("bailiwick") or "").strip()
+        if bailiwick:
+            out["bailiwick"] = bailiwick
+        return out
+
+    @staticmethod
+    def _dnsdb_extract_record_sets(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+        buckets: dict[str, list[str]] = {
+            "a_records": [],
+            "aaaa_records": [],
+            "ns_records": [],
+            "mx_records": [],
+            "txt_records": [],
+        }
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            rrtype = str(row.get("rrtype") or row.get("type") or "").strip().upper()
+            rdata_values = row.get("rdata", [])
+            if not isinstance(rdata_values, list):
+                rdata_values = [rdata_values] if rdata_values not in (None, "") else []
+            for item in rdata_values:
+                value = str(item or "").strip()
+                if not value:
+                    continue
+                if rrtype == "A" and value not in buckets["a_records"]:
+                    buckets["a_records"].append(value)
+                elif rrtype == "AAAA" and value not in buckets["aaaa_records"]:
+                    buckets["aaaa_records"].append(value)
+                elif rrtype == "NS":
+                    host = value.rstrip(".")
+                    if host and host not in buckets["ns_records"]:
+                        buckets["ns_records"].append(host)
+                elif rrtype == "MX":
+                    parts = value.split()
+                    host = (parts[-1] if parts else value).rstrip(".")
+                    if host and host not in buckets["mx_records"]:
+                        buckets["mx_records"].append(host)
+                elif rrtype == "TXT" and value not in buckets["txt_records"]:
+                    buckets["txt_records"].append(value)
+        return buckets
+
+    @classmethod
+    def _dnsdb_extract_subdomains(cls, rows: list[dict[str, Any]], apex: str) -> list[str]:
+        out: list[str] = []
+        suffix = "." + apex.lower()
+        for row in rows:
+            rrname = str(row.get("rrname") or row.get("owner") or "").strip().rstrip(".")
+            if not rrname:
+                continue
+            lowered = rrname.lower()
+            if lowered == apex.lower():
+                continue
+            if lowered.endswith(suffix) and rrname not in out:
+                out.append(rrname)
+        return out
+
+    @classmethod
+    def _dnsdb_extract_rrnames(cls, rows: list[dict[str, Any]]) -> list[str]:
+        out: list[str] = []
+        for row in rows:
+            rrname = str(row.get("rrname") or row.get("owner") or "").strip().rstrip(".")
+            if rrname and rrname not in out:
+                out.append(rrname)
+        return out
+
+    def _run_dnsdb(self, target: str, api_key: str) -> dict[str, Any]:
+        target_type, normalized = self._classify_target(target)
+        rr_limit = self._dnsdb_limit("DNSDB_RRSET_LIMIT", 25)
+        sub_limit = self._dnsdb_limit("DNSDB_SUBDOMAIN_LIMIT", 60)
+
+        if target_type == "ip":
+            rows, error, api_mode = self._dnsdb_lookup("rdata", "ip", normalized, api_key, limit=sub_limit)
+            out: dict[str, Any] = {
+                "source": "dnsdb",
+                "target_type": target_type,
+                "ip": normalized,
+                "api_mode": api_mode,
+            }
+            if error:
+                out["error"] = error
+                return out
+            rrnames = self._dnsdb_extract_rrnames(rows)
+            out["rrname_count"] = len(rrnames)
+            out["rrnames"] = rrnames[:60]
+            out["rdata_records"] = [self._dnsdb_row_preview(row) for row in rows[:40] if isinstance(row, dict)]
+            return out
+
+        domain = normalized if target_type == "domain" else self._extract_domain_from_url(normalized)
+        if not domain:
+            return {"source": "dnsdb", "target_type": target_type, "error": "unable_to_extract_domain"}
+
+        apex_rows, apex_error, api_mode = self._dnsdb_lookup("rrset", "name", domain, api_key, limit=rr_limit)
+        wildcard_rows, sub_error, _ = self._dnsdb_lookup("rrset", "name", f"*.{domain}", api_key, limit=sub_limit)
+        out: dict[str, Any] = {
+            "source": "dnsdb",
+            "target_type": target_type,
+            "domain": domain,
+            "api_mode": api_mode,
+        }
+        if apex_error:
+            out["error"] = apex_error
+            return out
+
+        out.update(self._dnsdb_extract_record_sets(apex_rows))
+        out["rrset_count"] = len(apex_rows)
+        rrtypes = sorted({str(row.get("rrtype") or row.get("type") or "").strip().upper() for row in apex_rows if isinstance(row, dict)})
+        if rrtypes:
+            out["rrtypes"] = rrtypes
+        out["rrsets"] = [self._dnsdb_row_preview(row) for row in apex_rows[:30] if isinstance(row, dict)]
+
+        subdomains = self._dnsdb_extract_subdomains(wildcard_rows, domain)
+        if subdomains:
+            out["subdomain_count"] = len(subdomains)
+            out["subdomains"] = subdomains[:60]
+        if wildcard_rows:
+            out["subdomain_rrset_count"] = len(wildcard_rows)
+            out["subdomain_rrsets"] = [self._dnsdb_row_preview(row) for row in wildcard_rows[:40] if isinstance(row, dict)]
+        if sub_error:
+            out["subdomain_error"] = sub_error
+        return out
 
     def _run_urlscan(self, target: str, api_key: str) -> dict[str, Any]:
         target_type, normalized = self._classify_target(target)

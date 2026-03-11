@@ -498,6 +498,9 @@ def format_enrichment_report(enrichment_data: dict) -> str:
             ("viewdns", "reverse_ns_domains"): ["ns", "domain", "last_resolved"],
             ("viewdns", "reverse_whois_domains"): ["query", "domain", "last_resolved"],
             ("viewdns", "spam_db_hits"): ["name", "host", "ip", "lastseen", "type"],
+            ("dnsdb", "rrsets"): ["rrname", "rrtype", "rdata", "count", "first_seen", "last_seen"],
+            ("dnsdb", "subdomain_rrsets"): ["rrname", "rrtype", "rdata", "count", "first_seen", "last_seen"],
+            ("dnsdb", "rdata_records"): ["rrname", "rrtype", "rdata", "count", "first_seen", "last_seen"],
             ("dnsdumpster", "a"): ["host", "ip", "asn", "asn_name", "country"],
             ("dnsdumpster", "ns"): ["host", "ip", "asn", "asn_name", "country"],
             ("dnsdumpster", "mx"): ["host", "ip", "asn", "asn_name", "country"],
@@ -582,6 +585,7 @@ def format_enrichment_report(enrichment_data: dict) -> str:
             "spur": "95",
             "mxtoolbox": "92",
             "viewdns": "93",
+            "dnsdb": "96;44",
             "dnsdumpster": "36",
             "securitytrails": "34;103",
             "spamhaus": "97;41",
@@ -868,6 +872,44 @@ def format_enrichment_report(enrichment_data: dict) -> str:
         result_keys = payload.get("result_keys", [])
         if isinstance(result_keys, list) and result_keys:
             lines.append(f"- result_keys: {', '.join(str(v) for v in result_keys)}")
+
+    def dnsdb_render(provider: str, payload: dict, lines: list[str], use_color: bool) -> None:
+        lines.append(provider_header(provider, use_color))
+        append_summary(payload, lines)
+        if payload.get("error"):
+            lines.append(f"- error: {payload.get('error')}")
+        for key in (
+            "target_type",
+            "domain",
+            "ip",
+            "api_mode",
+            "rrset_count",
+            "rrname_count",
+            "subdomain_count",
+            "subdomain_rrset_count",
+        ):
+            value = payload.get(key)
+            if value in (None, "", []):
+                continue
+            lines.append(f"- {key}: {value}")
+        for key, label, cap in (
+            ("a_records", "a_records", 20),
+            ("aaaa_records", "aaaa_records", 20),
+            ("ns_records", "ns_records", 20),
+            ("mx_records", "mx_records", 20),
+            ("txt_records", "txt_records", 20),
+            ("rrtypes", "rrtypes", 20),
+            ("subdomains", "subdomains", 40),
+            ("rrnames", "rrnames", 40),
+            ("rrsets", "rrsets", 25),
+            ("subdomain_rrsets", "subdomain_rrsets", 25),
+            ("rdata_records", "rdata_records", 25),
+        ):
+            value = payload.get(key)
+            if isinstance(value, list) and value:
+                render_list_field(lines, label, value, cap=cap, provider=provider)
+        if payload.get("subdomain_error"):
+            lines.append(f"- subdomain_error: {payload.get('subdomain_error')}")
 
     def urlscan_render(provider: str, payload: dict, lines: list[str], use_color: bool) -> None:
         def trunc(text: object, max_len: int) -> str:
@@ -1215,6 +1257,7 @@ def format_enrichment_report(enrichment_data: dict) -> str:
             "abuseipdb": abuseipdb_render,
             "greynoise": greynoise_render,
             "dnsdumpster": dnsdumpster_render,
+            "dnsdb": dnsdb_render,
             "viewdns": viewdns_render,
             "urlscan": urlscan_render,
             "securitytrails": securitytrails_render,
@@ -1671,8 +1714,8 @@ def run_console(args: argparse.Namespace) -> int:
             print("  quota                  show enrichment usage counters")
             print("  enrich <off|all-enabled|allip|alldns|allasn|csv>  set enrichment selection")
             print("  vt <target>            enrichment-only provider query")
-            print("  spur|shodan|censys|viewdns|mxtoolbox|abuseipdb|greynoise|dnsdumpster|urlscan|securitytrails|spamhaus|ripestat|allip|alldns|allasn [target]   enrichment-only provider query (uses last target if omitted)")
-            print("  aliases: vt dd vd mx ab cs gn st us rs, plus allip/alldns/allasn")
+            print("  spur|shodan|censys|viewdns|mxtoolbox|abuseipdb|greynoise|dnsdumpster|dnsdb|urlscan|securitytrails|spamhaus|ripestat|allip|alldns|allasn [target]   enrichment-only provider query (uses last target if omitted)")
+            print("  aliases: vt dd ddb vd mx ab cs gn st us rs, plus allip/alldns/allasn")
             print("  mode <stealth|public>  set routing mode")
             print("  tor install            install/update managed Tor runtime")
             print("  tor status             show Tor status")
