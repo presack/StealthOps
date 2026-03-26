@@ -31,7 +31,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='stealthops',
+    name='StealthOps',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
