@@ -294,7 +294,7 @@ pip install pyinstaller
 Create a single-file Windows executable and bundle Tor folder contents:
 
 ```powershell
-pyinstaller --onefile --name StealthOps --collect-data whois --add-data "vendor\tor;tor" main.py
+pyinstaller --onefile --name StealthOps --distpath .\dist\windows --workpath .\build\windows --collect-data whois --add-data "vendor\tor;tor" main.py
 ```
 
 Or use the helper script (auto-detects whether `vendor\tor` exists):
@@ -305,15 +305,15 @@ Or use the helper script (auto-detects whether `vendor\tor` exists):
 
 Output:
 
-- `dist\StealthOps.exe`
+- `dist\windows\StealthOps.exe`
 
 Run examples for end users (no venv required):
 
 ```powershell
-.\dist\StealthOps.exe
-.\dist\StealthOps.exe example.com
-.\dist\StealthOps.exe example.com --mode stealth
-.\dist\StealthOps.exe --web
+.\dist\windows\StealthOps.exe
+.\dist\windows\StealthOps.exe example.com
+.\dist\windows\StealthOps.exe example.com --mode stealth
+.\dist\windows\StealthOps.exe --web
 ```
 
 Packaging notes:
@@ -338,17 +338,17 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install pyinstaller
-pyinstaller --onefile --name stealthops --collect-data whois --collect-submodules uvicorn --collect-submodules fastapi --collect-submodules starlette main.py
+bash ./build-linux.sh
 ```
 
 Output:
 
-- `dist/stealthops`
+- `dist/linux/stealthops`
 
 Run:
 
 ```bash
-./dist/stealthops --web --host 0.0.0.0 --port 5000
+./dist/linux/stealthops --web --host 0.0.0.0 --port 5000
 ```
 
 Note: Tor managed update flow is currently Windows-manifest oriented. On Linux, prefer system Tor (`--prefer-system-tor`) or set `TOR_PATH`.

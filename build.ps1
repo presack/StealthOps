@@ -1,5 +1,8 @@
 $ErrorActionPreference = "Stop"
 
+New-Item -ItemType Directory -Force ".\dist\windows" | Out-Null
+New-Item -ItemType Directory -Force ".\build\windows" | Out-Null
+
 python -m pip install --upgrade pyinstaller
 python -m pip install -r requirements.txt
 
@@ -8,6 +11,10 @@ $pyiArgs = @(
     "--onefile",
     "--name",
     "StealthOps",
+    "--distpath",
+    ".\dist\windows",
+    "--workpath",
+    ".\build\windows",
     "--collect-data",
     "whois",
     "--collect-submodules",
@@ -27,4 +34,4 @@ $pyiArgs += "main.py"
 
 pyinstaller @pyiArgs
 
-Write-Host "Build complete: .\dist\StealthOps.exe"
+Write-Host "Build complete: .\dist\windows\StealthOps.exe"
