@@ -10,7 +10,7 @@ $pyiArgs = @(
     "--noconfirm",
     "--onefile",
     "--name",
-    "StealthOps",
+    "stealthops",
     "--distpath",
     ".\dist\windows",
     "--workpath",
@@ -34,4 +34,4 @@ $pyiArgs += "main.py"
 
 pyinstaller @pyiArgs
 
-Write-Host "Build complete: .\dist\windows\StealthOps.exe"
+Write-Host "Build complete: .\dist\windows\stealthops.exe"

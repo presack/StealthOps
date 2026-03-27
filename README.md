@@ -294,7 +294,7 @@ pip install pyinstaller
 Create a single-file Windows executable and bundle Tor folder contents:
 
 ```powershell
-pyinstaller --onefile --name StealthOps --distpath .\dist\windows --workpath .\build\windows --collect-data whois --add-data "vendor\tor;tor" main.py
+pyinstaller --onefile --name stealthops --distpath .\dist\windows --workpath .\build\windows --collect-data whois --add-data "vendor\tor;tor" main.py
 ```
 
 Or use the helper script (auto-detects whether `vendor\tor` exists):
@@ -305,15 +305,15 @@ Or use the helper script (auto-detects whether `vendor\tor` exists):
 
 Output:
 
-- `dist\windows\StealthOps.exe`
+- `dist\windows\stealthops.exe`
 
 Run examples for end users (no venv required):
 
 ```powershell
-.\dist\windows\StealthOps.exe
-.\dist\windows\StealthOps.exe example.com
-.\dist\windows\StealthOps.exe example.com --mode stealth
-.\dist\windows\StealthOps.exe --web
+.\dist\windows\stealthops.exe
+.\dist\windows\stealthops.exe example.com
+.\dist\windows\stealthops.exe example.com --mode stealth
+.\dist\windows\stealthops.exe --web
 ```
 
 Packaging notes:
