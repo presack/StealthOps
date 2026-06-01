@@ -17,3 +17,4 @@ build/
 pip-wheel-metadata/
 build-linux-local.sh
 build-windows-local.ps1
+CLAUDE.md

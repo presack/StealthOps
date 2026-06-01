@@ -1,0 +1,434 @@
+"""Interactive console REPL for StealthOps."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shlex
+import subprocess
+import sys
+
+from core_ops import QueryConfig, StealthQueryEngine, internet_available
+from enrichment import EnrichmentManager, PROVIDER_ALIASES
+from formatter import (
+    _c,
+    color_enabled,
+    interactive_stdio,
+    truncate_text,
+)
+from runner import execute_enrichment_only, execute_query
+from tor_engine import TorEngine
+
+
+def render_console_banner(
+    query_engine: StealthQueryEngine,
+    tor_engine: TorEngine,
+    tor_ok: bool,
+    emit_json: bool,
+    use_color: bool,
+) -> str:
+    title = _c(use_color, "[ PRIVACY-CENTRIC NETWORK INTELLIGENCE ]", "92")
+    rule = _c(use_color, "  _____________________________________________________________", "90")
+    art_lines = [
+        "  ____  _             _ _   _      ___               ",
+        " / ___|| |_ ___  __ _| | |_| |__  / _ \\ _ __  ___   ",
+        " \\___ \\| __/ _ \\/ _` | | __| '_ \\| | | | '_ \\/ __|  ",
+        "  ___) | ||  __/ (_| | | |_| | | | |_| | |_) \\__ \\  ",
+        " |____/ \\__\\___|\\__,_|_|\\__|_| |_|\\___/| .__/|___/  ",
+        "                                        |_|          ",
+    ]
+    art = "\n".join(_c(use_color, line, "36") for line in art_lines)
+    return (
+        f"{art}\n"
+        f"   {title}\n"
+        "\n"
+        f"{render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color)}\n"
+        f"{rule}"
+    )
+
+
+def render_status_lines(
+    query_engine: StealthQueryEngine,
+    tor_engine: TorEngine,
+    tor_ok: bool,
+    emit_json: bool,
+    use_color: bool,
+) -> str:
+    route = "Stealth" if query_engine.config.route_mode == "stealth" else "Public"
+    if query_engine.config.route_mode == "public":
+        tor_status = "Bypassed (Public Mode)"
+    elif tor_ok:
+        tor_status = f"Socks Proxy {tor_engine.socks_host}:{tor_engine.socks_port}"
+    else:
+        err = truncate_text(tor_engine.last_error or "Unavailable")
+        tor_status = f"Unavailable ({err})"
+
+    block_mode = "On" if query_engine.config.block_non_tor else "Off"
+    output_mode = "JSON" if emit_json else "Pretty"
+    route_disp = _c(use_color, route, "96" if route == "Stealth" else "93")
+    tor_disp = _c(use_color, tor_status, "92" if tor_ok and query_engine.config.route_mode == "stealth" else "93")
+    block_disp = _c(use_color, block_mode, "91" if block_mode == "On" else "90")
+    output_disp = _c(use_color, output_mode, "95" if output_mode == "JSON" else "97")
+
+    return (
+        f"  > Route Mode ...................... [{route_disp}]\n"
+        f"  > TOR Routing ..................... [{tor_disp}]\n"
+        f"  > Block Non-TOR ................... [{block_disp}]\n"
+        f"  > Output Mode ..................... [{output_disp}]"
+    )
+
+
+def run_web_background(
+    args: argparse.Namespace,
+    host_override: str | None = None,
+    port_override: int | None = None,
+) -> subprocess.Popen:
+    host = host_override or args.host
+    port = str(port_override or args.port)
+    tor_update = args.tor_update
+
+    _main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--web", "--host", host, "--port", port, "--tor-update", tor_update]
+    else:
+        cmd = [sys.executable, _main_py, "--web", "--host", host, "--port", port, "--tor-update", tor_update]
+
+    if args.tor_update_manifest:
+        cmd.extend(["--tor-update-manifest", args.tor_update_manifest])
+    if args.prefer_system_tor:
+        cmd.append("--prefer-system-tor")
+
+    return subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
+    route_mode = args.mode or "public"
+    emit_json = bool(args.json)
+    block_non_tor = bool(args.block_non_tor)
+    include_headers = bool(args.headers)
+    enrich_selection = str(args.enrich or "off")
+    use_color = color_enabled(args.no_color)
+
+    if args.install_tor:
+        print("[privacy] starting managed Tor install/update")
+        message = tor_engine.manage_tor_runtime(force_update=True)
+        print(f"[privacy] tor_runtime={message}")
+
+    tor_ok = tor_engine.ensure_tor() if route_mode == "stealth" else False
+    if route_mode == "stealth" and not tor_ok and not args.install_tor and not block_non_tor:
+        tor_ok = _maybe_prompt_install_tor(tor_engine)
+
+    query_engine = StealthQueryEngine(
+        tor_engine,
+        QueryConfig(block_non_tor=block_non_tor, route_mode=route_mode),
+    )
+    enrichment_manager = EnrichmentManager()
+
+    os.system("cls" if os.name == "nt" else "clear")
+    print(render_console_banner(query_engine, tor_engine, tor_ok, emit_json, use_color))
+    print("")
+    print("Type 'help' for commands.")
+    print("")
+    web_process: subprocess.Popen | None = None
+    last_target: str = ""
+
+    def shutdown_web() -> None:
+        nonlocal web_process
+        if not web_process:
+            return
+        try:
+            if web_process.poll() is None:
+                web_process.terminate()
+                web_process.wait(timeout=2.0)
+        except Exception:
+            try:
+                if web_process.poll() is None:
+                    web_process.kill()
+            except Exception:
+                pass
+        web_process = None
+
+    while True:
+        try:
+            raw_in = input("stealthops> ")
+        except EOFError:
+            shutdown_web()
+            print("")
+            return 0
+        except KeyboardInterrupt:
+            shutdown_web()
+            print("")
+            return 0
+
+        if "\x0c" in raw_in and raw_in.replace("\x0c", "").strip() == "":
+            os.system("cls" if os.name == "nt" else "clear")
+            print("")
+            continue
+
+        raw = raw_in.strip()
+        if not raw:
+            continue
+
+        try:
+            parts = shlex.split(raw)
+        except ValueError as exc:
+            print(f"error: {exc}")
+            continue
+
+        cmd = parts[0].lower()
+
+        if cmd in {"exit", "quit"}:
+            shutdown_web()
+            return 0
+
+        if cmd == "help":
+            print("Commands:")
+            print("  query <target>         run lookup on target")
+            print("  <target>               shorthand query (any non-command input)")
+            print("  !<target>              forced shorthand query")
+            print("  last                   show last successful target")
+            print("  last clear             clear last successful target")
+            print("  providers              list enrichment provider/key status")
+            print("  quota                  show enrichment usage counters")
+            print("  enrich <off|all-enabled|allip|alldns|allasn|csv>  set enrichment selection")
+            print("  vt <target>            enrichment-only provider query")
+            print("  spur|shodan|censys|viewdns|mxtoolbox|abuseipdb|greynoise|dnsdumpster|dnsdb|urlscan|securitytrails|spamhaus|ripestat|allip|alldns|allasn [target]   enrichment-only provider query (uses last target if omitted)")
+            print("  aliases: vt dd ddb vd mx ab cs gn st us rs, plus allip/alldns/allasn")
+            print("  mode <stealth|public>  set routing mode")
+            print("  tor install            install/update managed Tor runtime")
+            print("  tor status             show Tor status")
+            print("  web [host] [port]      start web server in background")
+            print("  banner                 print full intro banner")
+            print("  status                 print console status banner")
+            print("  block <on|off>         set block non-tor mode")
+            print("  json <on|off>          toggle JSON output")
+            print("  headers <on|off>       toggle HTTP header inspection")
+            print("  clear                  clear the screen")
+            print("  exit                   quit console")
+            print("")
+            continue
+
+        if cmd == "last":
+            if len(parts) == 1:
+                print(f"last target: {last_target or '-'}")
+                print("")
+                continue
+            if len(parts) == 2 and parts[1].lower() == "clear":
+                last_target = ""
+                print("last target cleared")
+                print("")
+                continue
+            print("usage: last [clear]")
+            print("")
+            continue
+
+        if cmd == "providers":
+            for line in enrichment_manager.format_provider_status_lines():
+                print(line)
+            print("")
+            continue
+
+        if cmd == "quota":
+            for line in enrichment_manager.format_quota_lines():
+                print(line)
+            print("")
+            continue
+
+        if cmd == "enrich":
+            if len(parts) != 2:
+                print("usage: enrich <off|all-enabled|allip|alldns|allasn|csv>")
+                print("")
+                continue
+            enrich_selection = parts[1].strip().lower()
+            resolved = enrichment_manager.resolve_requested(enrich_selection)
+            print(f"enrichment selection: {enrich_selection}")
+            print(f"resolved providers: {', '.join(resolved) if resolved else '-'}")
+            print("")
+            continue
+
+        if cmd == "clear":
+            os.system("cls" if os.name == "nt" else "clear")
+            print("")
+            continue
+
+        if cmd == "web":
+            host = args.host
+            port = args.port
+            if len(parts) >= 2:
+                host = parts[1]
+            if len(parts) >= 3:
+                try:
+                    port = int(parts[2])
+                except ValueError:
+                    print("usage: web [host] [port]")
+                    print("")
+                    continue
+            if len(parts) > 3:
+                print("usage: web [host] [port]")
+                print("")
+                continue
+            if web_process and web_process.poll() is None:
+                print("web server already running in background")
+                print("")
+                continue
+            if not internet_available(timeout=1.0):
+                print("[notice] internet connectivity check failed; web UI will start but queries may fail until connectivity returns")
+            print(f"Starting web server in background on {host}:{port}")
+            print("")
+            web_process = run_web_background(args, host_override=host, port_override=port)
+            print(f"[web] pid={web_process.pid} url=http://{host}:{port}")
+            print("")
+            continue
+
+        if cmd == "banner":
+            print(render_console_banner(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print("")
+            continue
+
+        if cmd == "status":
+            print(render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print("")
+            continue
+
+        if cmd == "query":
+            if len(parts) < 2:
+                print("usage: query <target>")
+                print("")
+                continue
+            target = parts[1]
+            rc = execute_query(
+                query_engine, target, emit_json,
+                use_color=use_color, include_headers=include_headers,
+                enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
+            )
+            if rc == 0:
+                last_target = target
+            print("")
+            continue
+
+        provider_cmd = PROVIDER_ALIASES.get(cmd)
+        if provider_cmd:
+            if len(parts) == 2:
+                target = parts[1]
+            elif len(parts) == 1 and last_target:
+                target = last_target
+                print(f"[notice] using last target: {target}")
+            elif len(parts) == 1:
+                print(f"usage: {cmd} <target>  (or run a target first, then use {cmd})")
+                print("")
+                continue
+            else:
+                print(f"usage: {cmd} [target]")
+                print("")
+                continue
+            rc = execute_enrichment_only(enrichment_manager, target, provider_cmd, emit_json, use_color=use_color)
+            if rc == 0:
+                last_target = target
+            print("")
+            continue
+
+        if cmd == "mode":
+            if len(parts) != 2 or parts[1].lower() not in {"stealth", "public"}:
+                print("usage: mode <stealth|public>")
+                print("")
+                continue
+            route_mode = parts[1].lower()
+            query_engine.config.route_mode = route_mode
+            if route_mode == "stealth":
+                tor_ok = tor_engine.ensure_tor()
+                if not tor_ok and not query_engine.config.block_non_tor:
+                    tor_ok = _maybe_prompt_install_tor(tor_engine)
+            else:
+                tor_ok = False
+            print(render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print("")
+            continue
+
+        if cmd == "tor":
+            if len(parts) != 2 or parts[1].lower() not in {"install", "status"}:
+                print("usage: tor <install|status>")
+                print("")
+                continue
+            action = parts[1].lower()
+            if action == "install":
+                print("[privacy] starting managed Tor install/update")
+                message = tor_engine.manage_tor_runtime(force_update=True)
+                print(f"[privacy] tor_runtime={message}")
+                tor_ok = tor_engine.ensure_tor() if query_engine.config.route_mode == "stealth" else False
+                print(render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            else:
+                if query_engine.config.route_mode == "stealth":
+                    tor_ok = tor_engine.ensure_tor()
+                print(render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
+                if tor_engine.last_update_message:
+                    print(f"[privacy] tor_runtime={tor_engine.last_update_message}")
+                if tor_engine.last_error:
+                    print(f"[privacy] notice={tor_engine.last_error}")
+            print("")
+            continue
+
+        if cmd == "block":
+            if len(parts) != 2 or parts[1].lower() not in {"on", "off"}:
+                print("usage: block <on|off>")
+                print("")
+                continue
+            block_non_tor = parts[1].lower() == "on"
+            query_engine.config.block_non_tor = block_non_tor
+            print(render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print("")
+            continue
+
+        if cmd == "json":
+            if len(parts) != 2 or parts[1].lower() not in {"on", "off"}:
+                print("usage: json <on|off>")
+                print("")
+                continue
+            emit_json = parts[1].lower() == "on"
+            print(render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
+            print("")
+            continue
+
+        if cmd == "headers":
+            if len(parts) != 2 or parts[1].lower() not in {"on", "off"}:
+                print("usage: headers <on|off>")
+                print("")
+                continue
+            include_headers = parts[1].lower() == "on"
+            print(f"http headers: {'on' if include_headers else 'off'}")
+            print("")
+            continue
+
+        shorthand_target = raw[1:].strip() if raw.startswith("!") else raw
+        if shorthand_target:
+            rc = execute_query(
+                query_engine, shorthand_target, emit_json,
+                use_color=use_color, include_headers=include_headers,
+                enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
+            )
+            if rc == 0:
+                last_target = shorthand_target
+            print("")
+            continue
+
+        print("unknown command. type 'help'")
+        print("")
+
+
+def _maybe_prompt_install_tor(tor_engine: TorEngine) -> bool:
+    if not interactive_stdio():
+        return False
+    try:
+        answer = input("Tor is unavailable. Install managed Tor now? [Y/n]: ").strip().lower()
+    except EOFError:
+        return False
+    if answer in ("", "y", "yes"):
+        print("[privacy] starting managed Tor install/update")
+        message = tor_engine.manage_tor_runtime(force_update=True)
+        print(f"[privacy] tor_runtime={message}")
+        return tor_engine.ensure_tor()
+    return False
