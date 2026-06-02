@@ -7,3 +7,4 @@ stem
 pysocks
 python-multipart
 colorama
+fpdf2

@@ -52,7 +52,7 @@ def execute_query(
     include_headers: bool = False,
     enrichment_manager: EnrichmentManager | None = None,
     enrichment_selection: str = "off",
-) -> int:
+) -> tuple[int, dict | None]:
     def render_query_banner() -> str:
         title = f"[ QUERY START ]  target={target}"
         border = "=" * max(64, len(title) + 6)
@@ -67,7 +67,7 @@ def execute_query(
     try:
         if not internet_available(timeout=1.0):
             print("error: internet connectivity check failed (no network route detected)")
-            return 1
+            return 1, None
         print("")
         print(render_query_banner())
         print("")
@@ -86,10 +86,10 @@ def execute_query(
             print(colorize_report(format_cli_report(result), use_color))
         if interactive_stdio():
             print(f"[status] query_complete elapsed={elapsed:.1f}s")
-        return 0
+        return 0, result
     except Exception as exc:
         print(f"error: {exc}")
-        return 1
+        return 1, None
 
 
 def execute_enrichment_only(

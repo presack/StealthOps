@@ -32,6 +32,8 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser.add_argument("--enrich-only", action="store_true", help="Run only enrichment providers (requires --enrich)")
     parser.add_argument("--providers", action="store_true", help="Show enrichment provider/key status and exit")
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors in console/CLI output")
+    parser.add_argument("--pdf", nargs="?", const=True, default=None, metavar="PATH",
+                        help="Save a PDF report to PATH after the query (default: ~/Downloads)")
     parser.add_argument("--host", default="127.0.0.1", help="Web server bind host")
     parser.add_argument("--port", type=int, default=5000, help="Web server bind port")
     return parser, parser.parse_args()
@@ -81,11 +83,22 @@ def run_cli(args: argparse.Namespace) -> int:
         if tor_engine.last_error:
             print(f"[privacy] notice={tor_engine.last_error}")
 
-    return execute_query(
+    rc, result_data = execute_query(
         query_engine, target, args.json,
         use_color=use_color, include_headers=bool(args.headers),
         enrichment_manager=enrichment_manager, enrichment_selection=args.enrich,
     )
+    if rc == 0 and result_data is not None and args.pdf is not None:
+        try:
+            from report import generate_report
+            pdf_path = None if args.pdf is True else args.pdf
+            saved = generate_report(target, result_data, out_path=pdf_path, route_mode=route_mode)
+            print(f"report saved: {saved}")
+        except RuntimeError as exc:
+            print(f"error: {exc}")
+        except Exception as exc:
+            print(f"error generating PDF report: {exc}")
+    return rc
 
 
 def run_web(args: argparse.Namespace, host_override: str | None = None, port_override: int | None = None) -> None:

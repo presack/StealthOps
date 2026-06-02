@@ -136,6 +136,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
     print("")
     web_process: subprocess.Popen | None = None
     last_target: str = ""
+    session_history: dict[str, dict] = {}  # target -> result data, most recent last
 
     def shutdown_web() -> None:
         nonlocal web_process
@@ -208,6 +209,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("  block <on|off>         set block non-tor mode")
             print("  json <on|off>          toggle JSON output")
             print("  headers <on|off>       toggle HTTP header inspection")
+            print("  report [target] [path] save PDF report for a queried indicator (default: ~/Downloads)")
             print("  clear                  clear the screen")
             print("  exit                   quit console")
             print("")
@@ -301,13 +303,17 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 print("")
                 continue
             target = parts[1]
-            rc = execute_query(
+            rc, _result = execute_query(
                 query_engine, target, emit_json,
                 use_color=use_color, include_headers=include_headers,
                 enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
             )
             if rc == 0:
                 last_target = target
+                session_history.pop(target, None)
+                session_history[target] = _result or {}
+                if len(session_history) > 10:
+                    del session_history[next(iter(session_history))]
             print("")
             continue
 
@@ -403,15 +409,96 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("")
             continue
 
+        if cmd == "report":
+            out_path_arg: str | None = None
+            target_arg: str | None = None
+            if len(parts) == 2:
+                arg = parts[1]
+                if "/" in arg or "\\" in arg or arg.lower().endswith(".pdf"):
+                    out_path_arg = arg
+                else:
+                    target_arg = arg
+            elif len(parts) == 3:
+                target_arg = parts[1]
+                out_path_arg = parts[2]
+            elif len(parts) > 3:
+                print("usage: report [target] [path]")
+                print("")
+                continue
+
+            if target_arg is not None:
+                if target_arg not in session_history:
+                    print(f"error: no cached result for '{target_arg}' — run a query first")
+                    print("")
+                    continue
+                report_target = target_arg
+                report_data = session_history[target_arg]
+            elif not session_history:
+                print("no query results in this session — run a query first")
+                print("")
+                continue
+            elif len(session_history) == 1:
+                report_target = next(iter(session_history))
+                report_data = session_history[report_target]
+            else:
+                targets_rev = list(reversed(list(session_history.keys())))
+                print("Select indicator for report:")
+                for i, t in enumerate(targets_rev, 1):
+                    suffix = _c(use_color, "  (most recent)", "90") if i == 1 else ""
+                    print(f"  {_c(use_color, str(i), '1;93')}. {t}{suffix}")
+                print("")
+                try:
+                    pick = input("Enter number [Enter for most recent]: ").strip()
+                except EOFError:
+                    print("")
+                    continue
+                if not pick:
+                    report_target = targets_rev[0]
+                else:
+                    try:
+                        idx = int(pick) - 1
+                        if 0 <= idx < len(targets_rev):
+                            report_target = targets_rev[idx]
+                        else:
+                            print("invalid selection")
+                            print("")
+                            continue
+                    except ValueError:
+                        print("invalid selection")
+                        print("")
+                        continue
+                report_data = session_history[report_target]
+
+            try:
+                from report import generate_report
+                print(f"generating report for {report_target}...")
+                saved = generate_report(
+                    target=report_target,
+                    result=report_data,
+                    out_path=out_path_arg,
+                    route_mode=query_engine.config.route_mode,
+                )
+                print(f"report saved: {_c(use_color, str(saved), '92')}")
+            except RuntimeError as exc:
+                print(f"error: {exc}")
+            except Exception as exc:
+                print(f"error generating report: {exc}")
+            print("")
+            continue
+
         shorthand_target = raw[1:].strip() if raw.startswith("!") else raw
         if shorthand_target:
-            rc = execute_query(
+            rc, _result = execute_query(
                 query_engine, shorthand_target, emit_json,
                 use_color=use_color, include_headers=include_headers,
                 enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
             )
             if rc == 0:
                 last_target = shorthand_target
+                session_history.pop(shorthand_target, None)
+                session_history[shorthand_target] = _result or {}
+                if len(session_history) > 10:
+                    del session_history[next(iter(session_history))]
             print("")
             continue
 
