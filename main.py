@@ -128,9 +128,9 @@ def main() -> int:
             use_color = color_enabled(args.no_color)
             print("")
             print(_c(use_color, "Quick Start", "1;96"))
-            print(f"  {_c(use_color, '1', '1;93')}. Start Web Server")
-            print(f"  {_c(use_color, '2', '1;93')}. Start Console")
-            print(f"  {_c(use_color, '3', '1;93')}. Exit")
+            print(f"  {_c(use_color, '1', '1;93')}. {_c(use_color, 'Start Web Server', '92')}")
+            print(f"  {_c(use_color, '2', '1;93')}. {_c(use_color, 'Start Console', '92')}")
+            print(f"  {_c(use_color, '3', '1;93')}. {_c(use_color, 'Exit', '92')}")
             prompt = f"{_c(use_color, '>', '96')} Select option [Enter to exit]: " if use_color else "Select option [Enter to exit]: "
             try:
                 choice = input(prompt).strip()
