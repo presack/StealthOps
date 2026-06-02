@@ -332,9 +332,20 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 print(f"usage: {cmd} [target]")
                 print("")
                 continue
-            rc = execute_enrichment_only(enrichment_manager, target, provider_cmd, emit_json, use_color=use_color)
+            rc, _enrich = execute_enrichment_only(enrichment_manager, target, provider_cmd, emit_json, use_color=use_color)
             if rc == 0:
                 last_target = target
+                if _enrich and target in session_history:
+                    stored_enrich = session_history[target].setdefault("enrichment", {
+                        "enabled": True, "selection": [], "resolved": [], "skipped": [], "providers": {},
+                    })
+                    stored_enrich["enabled"] = True
+                    stored_enrich.setdefault("providers", {}).update(_enrich.get("providers", {}))
+                    for key in ("selection", "resolved"):
+                        bucket = stored_enrich.setdefault(key, [])
+                        for item in _enrich.get(key, []):
+                            if item not in bucket:
+                                bucket.append(item)
             print("")
             continue
 

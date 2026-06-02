@@ -98,11 +98,11 @@ def execute_enrichment_only(
     selection: str,
     emit_json: bool,
     use_color: bool = False,
-) -> int:
+) -> tuple[int, dict | None]:
     try:
         if not internet_available(timeout=1.0):
             print("error: internet connectivity check failed (no network route detected)")
-            return 1
+            return 1, None
         title = f"[ ENRICHMENT START ]  target={target}  selection={selection}"
         border = "=" * max(64, len(title) + 6)
         print("")
@@ -125,7 +125,7 @@ def execute_enrichment_only(
             print(colorize_report(format_enrichment_report(result), use_color))
         if interactive_stdio():
             print(f"[status] enrichment_complete elapsed={elapsed:.1f}s")
-        return 0
+        return 0, result
     except Exception as exc:
         print(f"error: {exc}")
-        return 1
+        return 1, None
