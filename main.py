@@ -7,7 +7,7 @@ import argparse
 from console import _maybe_prompt_install_tor, run_console
 from core_ops import QueryConfig, StealthQueryEngine, internet_available
 from enrichment import EnrichmentManager, parse_enrichment_selection
-from formatter import color_enabled, interactive_stdio
+from formatter import _c, color_enabled, interactive_stdio
 from runner import execute_enrichment_only, execute_query
 from tor_engine import TorEngine
 from web_ui import build_app
@@ -125,13 +125,15 @@ def main() -> int:
     if no_explicit_action:
         parser.print_help()
         if interactive_stdio():
+            use_color = color_enabled(args.no_color)
             print("")
-            print("Quick Start")
-            print("1. Start Web Server")
-            print("2. Start Console")
-            print("3. Exit")
+            print(_c(use_color, "Quick Start", "1;96"))
+            print(f"  {_c(use_color, '1', '1;93')}. Start Web Server")
+            print(f"  {_c(use_color, '2', '1;93')}. Start Console")
+            print(f"  {_c(use_color, '3', '1;93')}. Exit")
+            prompt = f"{_c(use_color, '>', '96')} Select option [Enter to exit]: " if use_color else "Select option [Enter to exit]: "
             try:
-                choice = input("Select option [Enter to exit]: ").strip()
+                choice = input(prompt).strip()
             except EOFError:
                 return 0
             if choice == "1":
