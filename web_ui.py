@@ -5,12 +5,16 @@ from __future__ import annotations
 import html
 import ipaddress
 import json
+import os
+import re
+import tempfile
 import threading
 import time
 import uuid
+from datetime import datetime
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from core_ops import QueryConfig, StealthQueryEngine, internet_available
 from enrichment import EnrichmentManager, PROVIDER_SPECS, parse_enrichment_selection, selection_to_csv
@@ -157,7 +161,7 @@ def build_app(
             + "</pre>"
         )
 
-    def render_results(results: dict, show_json: bool) -> str:
+    def render_results(results: dict, show_json: bool, job_id: str = "") -> str:
         address_data = results.get("address", {})
         dns_data = results.get("dns", {})
         mx_data = results.get("mx", {})
@@ -541,8 +545,7 @@ def build_app(
 
             enrichment_html = (
                 "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>"
-                "<h3 class='font-semibold mb-2'>Enrichment Workspace</h3>"
-                "<p class='text-xs text-slate-400 mb-3'>Use tabs to inspect provider output without scrolling through one long block.</p>"
+                "<h3 class='font-semibold mb-2'>Enrichment</h3>"
                 "<div data-enrich-tabs class='space-y-3'>"
                 "<div class='flex flex-wrap gap-2'>"
                 + "".join(tab_buttons)
@@ -602,8 +605,16 @@ def build_app(
             network_panel_html = "<p class='text-slate-400 text-sm'>Awaiting data...</p>"
             network_panel_min_h = "min-h-[12rem]"
 
-        return f"""
-<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-6'>
+        download_bar = (
+            "<div class='flex justify-end mt-4 mb-1'>"
+            f"<a href='/query/report/{html.escape(job_id)}' "
+            "class='px-3 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-800 hover:bg-slate-700 text-slate-200'>"
+            "&#8595; Download PDF</a></div>"
+            if job_id else ""
+        )
+
+        return download_bar + f"""
+<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-2'>
   <h3 class='font-semibold mb-2'>Address lookup</h3>
   <div class='min-h-[4rem]'>
     {address_panel_html}
@@ -658,13 +669,11 @@ def build_app(
         selected_text = ", ".join(selected)
         return (
             "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'>"
-            "<h3 class='font-semibold mb-2'>Enrichment Workspace</h3>"
-            "<p class='text-xs text-slate-400 mb-2'>Selection: "
-            + html.escape(selected_text)
-            + "</p>"
+            "<h3 class='font-semibold mb-2'>Enrichment</h3>"
             "<div class='rounded-lg border border-cyan-700/60 bg-cyan-900/20 p-3'>"
-            "<p class='text-cyan-200 text-sm'>Gathering enrichment data...</p>"
-            "<p class='text-slate-400 text-xs mt-1'>Provider API calls can complete after the base lookup sections.</p>"
+            "<p class='text-cyan-200 text-sm'>Gathering enrichment data for "
+            + html.escape(selected_text)
+            + "...</p>"
             "</div>"
             "</section>"
         )
@@ -727,76 +736,30 @@ def build_app(
         all_enabled_selected = parsed_selection == ["all-enabled"]
         selected_enrich = set(parsed_selection)
         providers = enrichment_manager.provider_status()
-        grouped_rows: dict[str, list[str]] = {"ip": [], "domain": [], "mixed": []}
+        provider_labels: list[str] = []
         for name in sorted(PROVIDER_SPECS.keys()):
             item = providers.get(name, {})
             has_key = bool(item.get("has_key"))
             adapter_ready = bool(item.get("adapter_ready"))
-            usage = item.get("usage", {})
-            target_types = [str(t) for t in item.get("target_types", [])]
-            target_set = set(target_types)
             checked = "checked" if (all_enabled_selected and has_key and adapter_ready) or (name in selected_enrich) else ""
             disabled = "" if has_key and adapter_ready else "disabled"
-            target_attr = " ".join(target_types)
             chip_class = (
                 "border-emerald-500 bg-emerald-900/30 text-emerald-200"
                 if has_key and adapter_ready
                 else ("border-amber-500 bg-amber-900/20 text-amber-200" if has_key else "border-slate-700 bg-slate-900/50 text-slate-400")
             )
-            label = (
+            provider_labels.append(
                 "<label data-provider-chip='1' class='inline-flex items-center gap-2 px-2 py-1 rounded-md border transition "
                 + chip_class
                 + "'>"
-                + f"<input type='checkbox' name='enrich' value='{html.escape(name)}' {checked} {disabled} data-target-types='{html.escape(target_attr)}' class='accent-cyan-500' />"
+                + f"<input type='checkbox' name='enrich' value='{html.escape(name)}' {checked} {disabled} class='accent-cyan-500' />"
                 + f"<span class='text-xs'>{html.escape(name)}</span>"
-                + "<span class='text-[10px] opacity-80'>"
-                + html.escape(f"a:{usage.get('attempts',0)} ok:{usage.get('success',0)} err:{usage.get('errors',0)}")
-                + "</span></label>"
-            )
-            if target_set == {"ip"}:
-                grouped_rows["ip"].append(label)
-            elif "ip" in target_set and ("domain" in target_set or "url" in target_set):
-                grouped_rows["mixed"].append(label)
-            else:
-                grouped_rows["domain"].append(label)
-
-        def render_group(title: str, key: str, action: str = "", action_label: str = "") -> str:
-            rows = grouped_rows.get(key, [])
-            if not rows:
-                return ""
-            action_html = ""
-            if action:
-                action_html = (
-                    f"<button type='button' data-enrich-action='{html.escape(action)}' "
-                    "class='px-2 py-1 rounded-md border border-cyan-700 bg-cyan-900/20 text-xs text-cyan-200 hover:bg-cyan-900/35'>"
-                    + html.escape(action_label or title)
-                    + "</button>"
-                )
-            return (
-                "<div class='mt-3'>"
-                f"<p class='text-[11px] uppercase tracking-wide text-slate-400 mb-1'>{html.escape(title)}</p>"
-                "<div class='flex flex-wrap gap-2'>"
-                + action_html
-                + "".join(rows)
-                + "</div></div>"
+                + "</label>"
             )
 
         provider_strip = (
-            "<div class='mt-2'>"
-            "<p class='text-xs text-slate-400 mb-2'>Optional enrichment providers (ready providers are selectable).</p>"
-            + render_group(
-                "IP-focused providers",
-                "ip",
-                "ip-plus-cross",
-                "Select IP-focused enrichments",
-            )
-            + render_group(
-                "Domain-focused providers",
-                "domain",
-                "domain-plus-cross",
-                "Select domain-focused enrichments",
-            )
-            + render_group("Cross-target providers", "mixed")
+            "<div class='mt-3 flex flex-wrap gap-2'>"
+            + "".join(provider_labels)
             + "</div>"
         )
 
@@ -896,46 +859,6 @@ def build_app(
         }});
       }}
 
-      function initEnrichmentControls() {{
-        const actions = Array.from(form.querySelectorAll('[data-enrich-action]'));
-        const providerChecks = Array.from(form.querySelectorAll('input[name="enrich"]'));
-        if (!providerChecks.length) return;
-
-        function setCheckedByFilter(filterFn) {{
-          providerChecks.forEach(function(input) {{
-            if (input.hasAttribute('data-static-disabled')) {{
-              input.checked = false;
-              return;
-            }}
-            input.checked = !!filterFn(input);
-          }});
-        }}
-
-        providerChecks.forEach(function(input) {{
-          if (input.disabled) {{
-            input.setAttribute('data-static-disabled', '1');
-          }}
-        }});
-        actions.forEach(function(btn) {{
-          btn.addEventListener('click', function() {{
-            const action = btn.getAttribute('data-enrich-action');
-            if (action === 'ip-plus-cross') {{
-              setCheckedByFilter(function(input) {{
-                const types = (input.getAttribute('data-target-types') || '').split(' ');
-                return types.includes('ip');
-              }});
-              return;
-            }}
-            if (action === 'domain-plus-cross') {{
-              setCheckedByFilter(function(input) {{
-                const types = (input.getAttribute('data-target-types') || '').split(' ');
-                return types.includes('domain') || types.includes('url');
-              }});
-            }}
-          }});
-        }});
-      }}
-
       async function pollJob(jobId) {{
         while (true) {{
           const res = await fetch(`/query/status/${{jobId}}`);
@@ -959,9 +882,9 @@ def build_app(
         ev.preventDefault();
         const selectedEnrich = Array.from(form.querySelectorAll('input[name="enrich"]:checked')).map(function(i) {{ return i.value; }});
         const pendingEnrichment = selectedEnrich.length
-          ? "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Enrichment Workspace</h3><p class='text-xs text-slate-400 mb-2'>Selection: "
+          ? "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Enrichment</h3><div class='rounded-lg border border-cyan-700/60 bg-cyan-900/20 p-3'><p class='text-cyan-200 text-sm'>Gathering enrichment data for "
             + selectedEnrich.join(", ")
-            + "</p><div class='rounded-lg border border-cyan-700/60 bg-cyan-900/20 p-3'><p class='text-cyan-200 text-sm'>Gathering enrichment data...</p><p class='text-slate-400 text-xs mt-1'>Provider API calls can complete after the base lookup sections.</p></div></section>"
+            + "...</p></div></section>"
           : "";
         panel.innerHTML = ""
           + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-6'><h3 class='font-semibold mb-2'>Address lookup</h3><div class='min-h-[9rem] text-slate-400 text-sm'>Collecting...</div></section>"
@@ -988,7 +911,6 @@ def build_app(
       }});
 
       initEnrichmentTabs(document);
-      initEnrichmentControls();
     }})();
   </script>
 </body>
@@ -1173,7 +1095,7 @@ def build_app(
         if error:
             html_fragment = f"<p class='text-red-400'>{html.escape(error)}</p>"
         elif results:
-            html_fragment = render_results(results, False)
+            html_fragment = render_results(results, False, job_id=job_id if done else "")
             enrichment_ready = bool(
                 isinstance(results, dict)
                 and isinstance(results.get("enrichment"), dict)
@@ -1186,6 +1108,41 @@ def build_app(
             html_fragment += render_enrichment_pending(enrich_selection)
 
         return JSONResponse({"done": done, "error": error, "html": html_fragment})
+
+    @app.get("/query/report/{job_id}")
+    async def query_report(job_id: str) -> Response:
+        with jobs_lock:
+            job = jobs.get(job_id)
+        if not job:
+            return JSONResponse({"error": "job not found"}, status_code=404)
+        if not job.get("done"):
+            return JSONResponse({"error": "query not yet complete"}, status_code=409)
+        results = job.get("results", {})
+        target = str(job.get("target", "unknown"))
+        route_mode = str(job.get("route_mode", "public"))
+        try:
+            from report import generate_report
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+            os.close(tmp_fd)
+            try:
+                generate_report(target, results, out_path=tmp_path, route_mode=route_mode)
+                with open(tmp_path, "rb") as f:
+                    pdf_bytes = f.read()
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+            safe_target = re.sub(r"[^\w.\-]", "_", target)
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            filename = f"stealthops-{safe_target}-{ts}.pdf"
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
 
     @app.post("/tor/manage", response_class=HTMLResponse)
     async def tor_manage(
