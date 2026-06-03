@@ -97,6 +97,9 @@ def generate_report(
     from formatter import format_cli_report
 
     body_text = _safe(format_cli_report(result))
+    consensus_marker = "=== ENRICHMENT CONSENSUS ==="
+    if consensus_marker in body_text:
+        body_text = body_text[:body_text.index(consensus_marker)].rstrip()
     ts_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     line_h = 4.5
 
