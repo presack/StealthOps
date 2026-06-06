@@ -1,5 +1,6 @@
 .venv/
 .venv-wsl/
+.venv-build-windows/
 venv/
 __pycache__/
 *.py[cod]
@@ -18,3 +19,6 @@ pip-wheel-metadata/
 build-linux-local.sh
 build-windows-local.ps1
 CLAUDE.md
+.venv-linux/
+.env
+cache/
