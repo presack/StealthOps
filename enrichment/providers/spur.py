@@ -9,6 +9,24 @@ import requests
 from ._shared import ENRICHMENT_TIMEOUT_SECONDS, classify_target, short_http_error
 
 
+def _tunnel_records(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _unique_tunnel_values(tunnels: list[dict[str, Any]], key: str) -> list[Any]:
+    values: list[Any] = []
+    for tunnel in tunnels:
+        value = tunnel.get(key)
+        if value in (None, "") or value in values:
+            continue
+        values.append(value)
+    return values
+
+
 def run(target: str, key: str) -> dict[str, Any]:
     target_type, normalized = classify_target(target)
     if target_type != "ip":
@@ -24,7 +42,9 @@ def run(target: str, key: str) -> dict[str, Any]:
         return {"source": "spur", "target_type": target_type, "error": short_http_error(response)}
     payload = response.json()
 
-    tunnels = payload.get("tunnels", {}) if isinstance(payload, dict) else {}
+    tunnels = _tunnel_records(payload.get("tunnels") if isinstance(payload, dict) else None)
+    tunnel_operators = _unique_tunnel_values(tunnels, "operator")
+    tunnel_types = _unique_tunnel_values(tunnels, "type")
     client = payload.get("client", {}) if isinstance(payload, dict) else {}
     asn = payload.get("as", {}) if isinstance(payload, dict) else {}
     location = payload.get("location", {}) if isinstance(payload, dict) else {}
@@ -58,8 +78,11 @@ def run(target: str, key: str) -> dict[str, Any]:
         "infrastructure": payload.get("infrastructure"),
         "client_proxies": proxies,
         "client_behaviors": client.get("behaviors") if isinstance(client, dict) else None,
-        "tunnel_operator": tunnels.get("operator") if isinstance(tunnels, dict) else None,
-        "tunnel_type": tunnels.get("type") if isinstance(tunnels, dict) else None,
+        "tunnels": tunnels,
+        "tunnel_operator": tunnel_operators[0] if tunnel_operators else None,
+        "tunnel_operators": tunnel_operators,
+        "tunnel_type": tunnel_types[0] if tunnel_types else None,
+        "tunnel_types": tunnel_types,
         "risks": risks,
         "risk_level": risk_level,
     }
