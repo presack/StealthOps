@@ -363,6 +363,23 @@ class EnrichmentManager:
         )
         return any(marker in text for marker in retry_markers)
 
+    def run_one(self, target: str, provider: str) -> dict[str, Any]:
+        """Run a single named provider and return its payload dict."""
+        keys = self._keys.get(provider, [])
+        target_type, _ = classify_target(target)
+        if not self._provider_supports_target(provider, target_type):
+            return {"error": f"unsupported_target_type:{target_type}"}
+        if self._provider_requires_key(provider) and not keys:
+            return {"error": "missing_api_key"}
+        try:
+            payload = self._run_provider_with_fallback(provider, target, keys)
+            payload = self._with_summary(provider, payload)
+            self._record_usage(provider, error=bool(payload.get("error")))
+            return payload
+        except Exception as exc:
+            self._record_usage(provider, error=True)
+            return {"error": str(exc)}
+
     def _run_provider_with_fallback(self, provider: str, target: str, keys: list[str]) -> dict[str, Any]:
         if not self._provider_requires_key(provider):
             return self._run_provider(provider, target, "")

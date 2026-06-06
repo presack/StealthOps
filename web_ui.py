@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import html
 import ipaddress
 import json
 import os
 import re
+import secrets
 import tempfile
 import threading
 import time
@@ -69,6 +71,36 @@ def build_app(
 ) -> FastAPI:
     app = FastAPI(title="StealthOps")
 
+    cloud_mode = os.environ.get("CLOUD_MODE", "").strip().lower() in {"1", "true", "yes"}
+
+    if cloud_mode:
+        _cloud_user = os.environ.get("CLOUD_AUTH_USER", "")
+        _cloud_pass = os.environ.get("CLOUD_AUTH_PASS", "")
+
+        @app.middleware("http")
+        async def _basic_auth(request: Request, call_next):
+            auth = request.headers.get("Authorization", "")
+            if auth.startswith("Basic "):
+                try:
+                    decoded = base64.b64decode(auth[6:]).decode("utf-8", errors="replace")
+                    u, _, p = decoded.partition(":")
+                    if secrets.compare_digest(u, _cloud_user) and secrets.compare_digest(p, _cloud_pass):
+                        return await call_next(request)
+                except Exception:
+                    pass
+            from fastapi.responses import Response as _R
+            return _R(
+                "Unauthorized",
+                status_code=401,
+                media_type="text/plain",
+                headers={"WWW-Authenticate": 'Basic realm="StealthOps"'},
+            )
+
+        import cache as _cache_module
+        _cache_module.sweep()
+    else:
+        _cache_module = None
+
     tor_engine = TorEngine(
         tor_update_mode=tor_update_mode,
         tor_update_manifest=tor_update_manifest,
@@ -80,8 +112,8 @@ def build_app(
     jobs: dict[str, dict] = {}
     request_hits: dict[str, list[float]] = {}
     RATE_LIMIT_WINDOW_SECONDS = 60.0
-    RATE_LIMIT_MAX_REQUESTS = 20
-    MAX_ACTIVE_JOBS = 8
+    RATE_LIMIT_MAX_REQUESTS = int(os.environ.get("CLOUD_RATE_LIMIT", "60")) if cloud_mode else 20
+    MAX_ACTIVE_JOBS = 20 if cloud_mode else 8
 
     def client_ip(request: Request) -> str:
         if request.client and request.client.host:
@@ -701,7 +733,7 @@ def build_app(
             "<p class='text-slate-300 text-xs mt-2'>Runtime: "
             + html.escape(str(tor_engine.last_update_message))
             + "</p>"
-            if tor_engine.last_update_message
+            if tor_engine.last_update_message and not cloud_mode
             else ""
         )
         notice_html = f"<p class='text-cyan-300 mt-3'>{html.escape(str(notice))}</p>" if notice else ""
@@ -730,38 +762,76 @@ def build_app(
       </form>
     </section>
 """
-        run_button_label = "Run Query (Stealth)" if route_mode == "stealth" else "Run Query (Public)"
-        run_button_class = "bg-emerald-600 hover:bg-emerald-500" if route_mode == "stealth" else "bg-cyan-600 hover:bg-cyan-500"
+        if cloud_mode:
+            run_button_label = "Run Query"
+            run_button_class = "bg-cyan-600 hover:bg-cyan-500"
+        else:
+            run_button_label = "Run Query (Stealth)" if route_mode == "stealth" else "Run Query (Public)"
+            run_button_class = "bg-emerald-600 hover:bg-emerald-500" if route_mode == "stealth" else "bg-cyan-600 hover:bg-cyan-500"
         parsed_selection = parse_enrichment_selection(enrich_selection)
         all_enabled_selected = parsed_selection == ["all-enabled"]
         selected_enrich = set(parsed_selection)
         providers = enrichment_manager.provider_status()
-        provider_labels: list[str] = []
-        for name in sorted(PROVIDER_SPECS.keys()):
-            item = providers.get(name, {})
-            has_key = bool(item.get("has_key"))
-            adapter_ready = bool(item.get("adapter_ready"))
-            checked = "checked" if (all_enabled_selected and has_key and adapter_ready) or (name in selected_enrich) else ""
-            disabled = "" if has_key and adapter_ready else "disabled"
-            chip_class = (
-                "border-emerald-500 bg-emerald-900/30 text-emerald-200"
-                if has_key and adapter_ready
-                else ("border-amber-500 bg-amber-900/20 text-amber-200" if has_key else "border-slate-700 bg-slate-900/50 text-slate-400")
+        if cloud_mode:
+            enabled_names = sorted(
+                name for name, item in providers.items()
+                if item.get("has_key") and item.get("adapter_ready")
             )
-            provider_labels.append(
-                "<label data-provider-chip='1' class='inline-flex items-center gap-2 px-2 py-1 rounded-md border transition "
-                + chip_class
-                + "'>"
-                + f"<input type='checkbox' name='enrich' value='{html.escape(name)}' {checked} {disabled} class='accent-cyan-500' />"
-                + f"<span class='text-xs'>{html.escape(name)}</span>"
-                + "</label>"
+            provider_strip = (
+                "<div class='mt-3 flex flex-wrap gap-2 items-center'>"
+                + "".join(
+                    f"<span class='px-2 py-1 rounded-md border border-emerald-700 bg-emerald-900/30 text-emerald-200 text-xs'>{html.escape(name)}</span>"
+                    for name in enabled_names
+                )
+                + (
+                    "<span class='text-xs text-slate-400 self-center ml-1'>All enabled providers will run automatically.</span>"
+                    if enabled_names else
+                    "<span class='text-xs text-slate-400'>No enrichment providers configured.</span>"
+                )
+                + "</div>"
+            )
+        else:
+            provider_labels: list[str] = []
+            for name in sorted(PROVIDER_SPECS.keys()):
+                item = providers.get(name, {})
+                has_key = bool(item.get("has_key"))
+                adapter_ready = bool(item.get("adapter_ready"))
+                checked = "checked" if (all_enabled_selected and has_key and adapter_ready) or (name in selected_enrich) else ""
+                disabled = "" if has_key and adapter_ready else "disabled"
+                chip_class = (
+                    "border-emerald-500 bg-emerald-900/30 text-emerald-200"
+                    if has_key and adapter_ready
+                    else ("border-amber-500 bg-amber-900/20 text-amber-200" if has_key else "border-slate-700 bg-slate-900/50 text-slate-400")
+                )
+                provider_labels.append(
+                    "<label data-provider-chip='1' class='inline-flex items-center gap-2 px-2 py-1 rounded-md border transition "
+                    + chip_class
+                    + "'>"
+                    + f"<input type='checkbox' name='enrich' value='{html.escape(name)}' {checked} {disabled} class='accent-cyan-500' />"
+                    + f"<span class='text-xs'>{html.escape(name)}</span>"
+                    + "</label>"
+                )
+            provider_strip = (
+                "<div class='mt-3 flex flex-wrap gap-2'>"
+                + "".join(provider_labels)
+                + "</div>"
             )
 
-        provider_strip = (
-            "<div class='mt-3 flex flex-wrap gap-2'>"
-            + "".join(provider_labels)
-            + "</div>"
-        )
+        if cloud_mode:
+            _hdr_badge = "<div class='px-4 py-2 rounded-full bg-cyan-600 text-white text-sm font-semibold'>Public Mode</div>"
+            _hdr_toggle = ""
+            _form_route = ""
+            _route_note = ""
+        else:
+            _hdr_badge = f"<div class='px-4 py-2 rounded-full {shield_class} text-white text-sm font-semibold'>Privacy Shield: {shield_text}</div>"
+            _hdr_toggle = (
+                f"<form method='post' action='/mode'>"
+                f"<input type='hidden' name='route_mode' value='{html.escape(switch_to)}' />"
+                f"<button class='text-sm underline text-slate-300 hover:text-white'>{html.escape(switch_label)}</button>"
+                f"</form>"
+            )
+            _form_route = f"<input type='hidden' name='route_mode' value='{html.escape(route_mode)}' />"
+            _route_note = "Tor-routed where available." if route_mode == "stealth" else "Fast public route."
 
         return f"""
 <!doctype html>
@@ -780,13 +850,8 @@ def build_app(
         <p class='text-slate-400 text-xs mt-1'>Privacy-centric network intelligence</p>
       </div>
       <div class='flex items-center gap-3'>
-        <div class='px-4 py-2 rounded-full {shield_class} text-white text-sm font-semibold'>
-          Privacy Shield: {shield_text}
-        </div>
-        <form method='post' action='/mode'>
-          <input type='hidden' name='route_mode' value='{html.escape(switch_to)}' />
-          <button class='text-sm underline text-slate-300 hover:text-white'>{html.escape(switch_label)}</button>
-        </form>
+        {_hdr_badge}
+        {_hdr_toggle}
       </div>
     </header>
 
@@ -800,10 +865,10 @@ def build_app(
           <input name='target' value='{html.escape(target)}' required class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2' />
         </div>
         {provider_strip}
-        <input type='hidden' name='route_mode' value='{html.escape(route_mode)}' />
+        {_form_route}
         <div class='flex gap-3'>
           <button class='px-4 py-2 rounded-lg font-semibold text-white {run_button_class}'>{html.escape(run_button_label)}</button>
-          <span class='self-center text-xs text-slate-400'>{"Tor-routed where available." if route_mode == "stealth" else "Fast public route."}</span>
+          <span class='self-center text-xs text-slate-400'>{_route_note}</span>
         </div>
       </form>
       {error_html}
@@ -929,6 +994,8 @@ def build_app(
 
     @app.post("/mode", response_class=HTMLResponse)
     async def set_mode(route_mode: str = Form("public")) -> HTMLResponse:
+        if cloud_mode:
+            return HTMLResponse(render_page(route_mode="public"))
         selected = "stealth" if route_mode == "stealth" else "public"
         query_engine.config.route_mode = selected
         notice = f"Routing mode set to {selected}."
@@ -1010,7 +1077,7 @@ def build_app(
         form = await request.form()
         enrich_all = str(form.get("enrich_all", "")).strip().lower() in {"1", "true", "on", "yes"}
         enrich_values = [str(v) for v in form.getlist("enrich")]
-        enrich_selection = "all-enabled" if enrich_all else selection_to_csv(enrich_values)
+        enrich_selection = "all-enabled" if (cloud_mode or enrich_all) else selection_to_csv(enrich_values)
         ip = client_ip(request)
         rate_limit_error = enforce_rate_limit(ip)
         if rate_limit_error:
@@ -1062,9 +1129,34 @@ def build_app(
                     jobs[job_id]["updated_at"] = time.time()
 
             try:
-                final = local_engine.run_all_staged(target_value, on_update=on_update)
-                if parse_enrichment_selection(enrich_selection):
-                    final["enrichment"] = enrichment_manager.run(target_value, enrich_selection)
+                if cloud_mode and _cache_module is not None:
+                    cached_core = _cache_module.get(target_value, "core")
+                    if cached_core is not None:
+                        final = dict(cached_core)
+                    else:
+                        final = local_engine.run_all_staged(target_value, on_update=on_update)
+                        _cache_module.put(target_value, "core", {k: v for k, v in final.items() if k != "enrichment"})
+                    resolved = enrichment_manager.resolve_requested("all-enabled")
+                    providers_out: dict = {}
+                    for pname in resolved:
+                        cached_payload = _cache_module.get(target_value, pname)
+                        if cached_payload is not None:
+                            providers_out[pname] = cached_payload
+                        else:
+                            payload = enrichment_manager.run_one(target_value, pname)
+                            _cache_module.put(target_value, pname, payload)
+                            providers_out[pname] = payload
+                    final["enrichment"] = {
+                        "enabled": True,
+                        "selection": ["all-enabled"],
+                        "resolved": resolved,
+                        "providers": providers_out,
+                        "skipped": [],
+                    }
+                else:
+                    final = local_engine.run_all_staged(target_value, on_update=on_update)
+                    if parse_enrichment_selection(enrich_selection):
+                        final["enrichment"] = enrichment_manager.run(target_value, enrich_selection)
                 with jobs_lock:
                     if job_id in jobs:
                         jobs[job_id]["results"] = final
