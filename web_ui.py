@@ -364,6 +364,8 @@ def build_app(
             if isinstance(value, bool):
                 return "true" if value else "false"
 
+            _expand_js = "var g=this.closest('.xpand');g.querySelectorAll('.xmore').forEach(function(e){{e.classList.remove('hidden')}});this.remove()"
+
             def render_dict_list_table(dict_list: list[dict], cap: int = 30) -> str:
                 provider_key = provider_name.strip().lower()
                 field_key_l = field_key.strip().lower()
@@ -414,9 +416,9 @@ def build_app(
                 if not columns:
                     return "<span class='text-slate-500'>-</span>"
 
-                preview = dict_list[:cap]
                 body_rows = []
-                for item in preview:
+                for i, item in enumerate(dict_list):
+                    extra = " xmore hidden" if i >= cap else ""
                     cells: list[str] = []
                     for col in columns:
                         raw = item.get(col, "-")
@@ -431,29 +433,24 @@ def build_app(
                         else:
                             cell = html.escape(str(raw))
                         cells.append(f"<td class='py-1 align-top break-all'>{cell}</td>")
-                    body_rows.append(
-                        "<tr>"
-                        + "".join(cells)
-                        + "</tr>"
-                    )
-                more = ""
-                if len(dict_list) > len(preview):
-                    more = (
-                        "<p class='text-slate-500 text-[11px] mt-1'>"
-                        f"... (+{len(dict_list) - len(preview)} more)"
-                        "</p>"
-                    )
+                    body_rows.append(f"<tr class='{extra.strip()}'>" + "".join(cells) + "</tr>")
+
+                more_count = len(dict_list) - cap
+                more_btn = (
+                    f"<button onclick=\"{_expand_js}\" "
+                    f"class='text-cyan-400 text-[11px] mt-1 cursor-pointer hover:text-cyan-300 block'>&#8595; Show {more_count} more</button>"
+                ) if more_count > 0 else ""
                 header_cells = "".join(
                     f"<th class='text-left py-1 pr-3 text-slate-400'>{html.escape(str(col))}</th>"
                     for col in columns
                 )
                 return (
-                    "<div class='overflow-x-auto'>"
+                    "<div class='overflow-x-auto xpand'>"
                     "<table class='w-full text-xs'>"
                     "<thead><tr>" + header_cells + "</tr></thead>"
                     f"<tbody>{''.join(body_rows)}</tbody>"
                     "</table>"
-                    + more
+                    + more_btn
                     + "</div>"
                 )
 
@@ -461,28 +458,36 @@ def build_app(
                 return render_dict_list_table(value)
             if isinstance(value, dict):
                 keys = sorted(value.keys())
+                cap = 8
                 rows = []
-                for key in keys[:8]:
+                for i, key in enumerate(keys):
+                    extra = " xmore hidden" if i >= cap else ""
                     rows.append(
-                        "<div class='flex gap-2'>"
+                        f"<div class='flex gap-2{extra}'>"
                         f"<span class='text-slate-400'>{html.escape(str(key))}:</span>"
                         f"<span class='text-slate-100 break-all'>{html.escape(str(value.get(key)))}</span>"
                         "</div>"
                     )
-                if len(keys) > 8:
-                    rows.append(f"<div class='text-slate-500'>... (+{len(keys) - 8} more)</div>")
-                return "<div class='space-y-1'>" + "".join(rows) + "</div>"
+                more_count = len(keys) - cap
+                more_btn = (
+                    f"<button onclick=\"{_expand_js}\" "
+                    f"class='text-cyan-400 text-[11px] cursor-pointer hover:text-cyan-300'>&#8595; Show {more_count} more</button>"
+                ) if more_count > 0 else ""
+                return "<div class='space-y-1 xpand'>" + "".join(rows) + more_btn + "</div>"
             if isinstance(value, list):
                 if not value:
                     return "<span class='text-slate-500'>-</span>"
-                preview = value[:12]
+                cap = 12
                 items = []
-                for entry in preview:
-                    items.append(f"<li class='break-all'>{html.escape(str(entry))}</li>")
-                tail = ""
-                if len(value) > len(preview):
-                    tail = f"<li class='text-slate-500'>... (+{len(value) - len(preview)} more)</li>"
-                return "<ul class='list-disc ml-4 space-y-1'>" + "".join(items) + tail + "</ul>"
+                for i, entry in enumerate(value):
+                    extra = " xmore hidden" if i >= cap else ""
+                    items.append(f"<li class='break-all{extra}'>{html.escape(str(entry))}</li>")
+                more_count = len(value) - cap
+                more_btn = (
+                    f"<li class='list-none'><button onclick=\"{_expand_js}\" "
+                    f"class='text-cyan-400 text-[11px] cursor-pointer hover:text-cyan-300'>&#8595; Show {more_count} more</button></li>"
+                ) if more_count > 0 else ""
+                return "<ul class='list-disc ml-4 space-y-1 xpand'>" + "".join(items) + more_btn + "</ul>"
             return html.escape(str(value))
 
         enrichment_html = ""
