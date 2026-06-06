@@ -1,10 +1,17 @@
 $ErrorActionPreference = "Stop"
 
-New-Item -ItemType Directory -Force ".\dist\windows" | Out-Null
-New-Item -ItemType Directory -Force ".\build\windows" | Out-Null
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$VenvDir = Join-Path $ScriptDir ".venv-build-windows"
+$PythonExe = Join-Path $VenvDir "Scripts\python.exe"
+$DistDir = Join-Path $ScriptDir "dist\windows"
+$BuildDir = Join-Path $ScriptDir "build\windows"
 
-python -m pip install --upgrade pyinstaller
-python -m pip install -r requirements.txt
+Set-Location $ScriptDir
+
+py -3.12 -m venv $VenvDir
+
+& $PythonExe -m pip install --upgrade pip
+& $PythonExe -m pip install -r (Join-Path $ScriptDir "requirements.txt") pyinstaller
 
 $pyiArgs = @(
     "--noconfirm",
@@ -12,9 +19,9 @@ $pyiArgs = @(
     "--name",
     "stealthops",
     "--distpath",
-    ".\dist\windows",
+    $DistDir,
     "--workpath",
-    ".\build\windows",
+    $BuildDir,
     "--collect-data",
     "whois",
     "--collect-submodules",
@@ -32,6 +39,6 @@ if (Test-Path ".\vendor\tor") {
 }
 $pyiArgs += "main.py"
 
-pyinstaller @pyiArgs
+& $PythonExe -m PyInstaller @pyiArgs
 
-Write-Host "Build complete: .\dist\windows\stealthops.exe"
+Write-Host "Build complete: $(Join-Path $DistDir 'stealthops.exe')"
