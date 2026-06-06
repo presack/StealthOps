@@ -46,9 +46,16 @@ if ! command -v docker-compose &>/dev/null && ! docker compose version &>/dev/nu
 fi
 
 echo "==> [3/6] Configuring nginx for $FQDN"
-sudo sed "s/FQDN/$FQDN/g" "$REPO_ROOT/deploy/nginx.conf" \
-    > /tmp/stealthops-nginx.conf
-sudo cp /tmp/stealthops-nginx.conf /etc/nginx/sites-available/stealthops
+# Bootstrap with HTTP-only so nginx starts clean before certbot runs.
+# Certbot needs port 80 reachable to complete the ACME challenge.
+sudo tee /etc/nginx/sites-available/stealthops > /dev/null << NGINXEOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $FQDN;
+    location / { return 200 'ok'; add_header Content-Type text/plain; }
+}
+NGINXEOF
 sudo ln -sf /etc/nginx/sites-available/stealthops \
             /etc/nginx/sites-enabled/stealthops
 sudo rm -f /etc/nginx/sites-enabled/default
@@ -56,10 +63,16 @@ sudo nginx -t
 sudo systemctl reload nginx
 
 echo "==> [4/6] Issuing TLS certificate for $FQDN"
-# Certbot will update /etc/nginx/sites-available/stealthops with the
-# ssl_certificate directives and reload nginx automatically.
 sudo certbot --nginx -d "$FQDN" --non-interactive --agree-tos \
     --email "$EMAIL" --redirect
+
+echo "==> [4b/6] Installing production nginx config"
+# Now that the cert exists, replace with our full config.
+sudo sed "s/FQDN/$FQDN/g" "$REPO_ROOT/deploy/nginx.conf" \
+    > /tmp/stealthops-nginx.conf
+sudo cp /tmp/stealthops-nginx.conf /etc/nginx/sites-available/stealthops
+sudo nginx -t
+sudo systemctl reload nginx
 
 echo "==> [5/6] Creating cache volume directory"
 sudo mkdir -p /data/cache
