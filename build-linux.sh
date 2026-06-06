@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mkdir -p ./dist/linux ./build/linux
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$SCRIPT_DIR/.venv-build-linux"
 
-python3 -m pip install --upgrade pyinstaller
-python3 -m pip install -r requirements.txt
+mkdir -p "$SCRIPT_DIR/dist/linux" "$SCRIPT_DIR/build/linux"
 
-pyinstaller \
+echo "==> Setting up build venv at $VENV_DIR"
+python3 -m venv "$VENV_DIR"
+"$VENV_DIR/bin/pip" install --upgrade pip --quiet
+"$VENV_DIR/bin/pip" install --upgrade pyinstaller --quiet
+"$VENV_DIR/bin/pip" install -r "$SCRIPT_DIR/requirements.txt" --quiet
+
+echo "==> Running PyInstaller"
+"$VENV_DIR/bin/pyinstaller" \
   --noconfirm \
   --onefile \
   --name stealthops \
-  --distpath ./dist/linux \
-  --workpath ./build/linux \
+  --distpath "$SCRIPT_DIR/dist/linux" \
+  --workpath "$SCRIPT_DIR/build/linux" \
   --collect-data whois \
   --collect-submodules uvicorn \
   --collect-submodules fastapi \
   --collect-submodules starlette \
-  main.py
+  "$SCRIPT_DIR/main.py"
 
-echo "Build complete: ./dist/linux/stealthops"
+echo "Build complete: $SCRIPT_DIR/dist/linux/stealthops"

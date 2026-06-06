@@ -20,5 +20,6 @@ build-linux-local.sh
 build-windows-local.ps1
 CLAUDE.md
 .venv-linux/
+.venv-build-linux/
 .env
 cache/
