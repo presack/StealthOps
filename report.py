@@ -46,7 +46,8 @@ def _load_fonts(pdf: Any) -> tuple[str, str]:
     Try to load modern system fonts. Returns (header_font, mono_font).
     Falls back to Helvetica/Courier (always available as PDF core fonts).
     """
-    win_fonts = Path("C:/Windows/Fonts")
+    font_dirs = [Path("C:/Windows/Fonts"), Path("/mnt/c/Windows/Fonts")]
+    win_fonts = next((d for d in font_dirs if d.is_dir()), font_dirs[0])
     candidates = [
         (win_fonts / "segoeui.ttf",  win_fonts / "segoeuib.ttf",
          win_fonts / "consola.ttf",  win_fonts / "consolab.ttf",
@@ -76,7 +77,7 @@ def _section_label(line: str) -> str:
     title = parts[0]
     if len(parts) >= 2:
         source = parts[1].strip("[] ").strip()
-        return f"{title}  —  {source}"
+        return f"{title}  |  {source}"
     return title
 
 
