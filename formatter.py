@@ -126,7 +126,7 @@ def human_label(key: str) -> str:
 # Main CLI report
 # ---------------------------------------------------------------------------
 
-def format_cli_report(result: dict) -> str:
+def format_cli_report(result: dict, full: bool = False) -> str:
     address_data = result.get("address", {})
     dns_data = result.get("dns", {})
     mx_data = result.get("mx", {})
@@ -244,7 +244,7 @@ def format_cli_report(result: dict) -> str:
 
     if enrichment_data.get("enabled"):
         lines.append("")
-        enrich_block = format_enrichment_report(dict(enrichment_data)).splitlines()
+        enrich_block = format_enrichment_report(dict(enrichment_data), full=full).splitlines()
         if enrich_block:
             enrich_block[0] = "=== ENRICHMENT ===  [source: optional provider APIs]"
         lines.extend(enrich_block)
@@ -425,7 +425,7 @@ def build_enrichment_consensus(enrichment_data: dict) -> list[str]:
 # Enrichment report
 # ---------------------------------------------------------------------------
 
-def format_enrichment_report(enrichment_data: dict) -> str:
+def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
     def ts_to_iso(value: object) -> str:
         try:
             ts = int(value)
@@ -495,6 +495,8 @@ def format_enrichment_report(enrichment_data: dict) -> str:
     def render_dict_list_table(lines: list[str], label: str, rows: list[dict], cap: int = 25, provider: str = "") -> None:
         if not rows:
             return
+        if full:
+            cap = 10_000
         shown = rows[:cap]
         cols = select_table_columns(shown, provider=provider, label=label)
         if not cols:
@@ -521,6 +523,8 @@ def format_enrichment_report(enrichment_data: dict) -> str:
     def render_list_field(lines: list[str], label: str, value: list, cap: int = 30, provider: str = "") -> None:
         if not isinstance(value, list) or not value:
             return
+        if full:
+            cap = 10_000
         if is_list_of_dicts(value):
             render_dict_list_table(lines, label, value, cap=cap, provider=provider)
             return
@@ -637,7 +641,7 @@ def format_enrichment_report(enrichment_data: dict) -> str:
         top_services = payload.get("top_services", [])
         if isinstance(top_services, list) and top_services:
             lines.append("- top_services:")
-            for svc in top_services[:12]:
+            for svc in (top_services if full else top_services[:12]):
                 lines.append(f"  - {svc}")
         sample_ports = payload.get("sample_ports", [])
         if isinstance(sample_ports, list) and sample_ports:
@@ -669,7 +673,7 @@ def format_enrichment_report(enrichment_data: dict) -> str:
             lines.append(f"- {key}: {value}")
         ports = payload.get("ports", [])
         if isinstance(ports, list) and ports:
-            lines.append(f"- ports ({len(ports)}): {', '.join(str(p) for p in ports[:20])}")
+            lines.append(f"- ports ({len(ports)}): {', '.join(str(p) for p in (ports if full else ports[:20]))}")
         open_count = int(payload.get("open_port_count", 0) or 0)
         lines.append(
             f"- open_port_count: {color_severity(str(open_count), 'high' if open_count >= 20 else ('medium' if open_count >= 5 else 'low'), use_color)}"
@@ -685,7 +689,7 @@ def format_enrichment_report(enrichment_data: dict) -> str:
         preview = payload.get("service_preview", [])
         if isinstance(preview, list) and preview:
             lines.append("- service_preview:")
-            for item in preview[:8]:
+            for item in (preview if full else preview[:8]):
                 lines.append(f"  - {item}")
 
     def spur_render(provider: str, payload: dict, lines: list[str], use_color: bool) -> None:
@@ -835,7 +839,7 @@ def format_enrichment_report(enrichment_data: dict) -> str:
             lines.append("- recent_scans:")
             lines.append("  time                 score  domain                           ip               result")
             lines.append("  -------------------  -----  -------------------------------  ---------------  ----------------------------")
-            max_rows = 20
+            max_rows = len(scans) if full else 20
             for scan in scans[:max_rows]:
                 if not isinstance(scan, dict):
                     continue
@@ -888,15 +892,17 @@ def format_enrichment_report(enrichment_data: dict) -> str:
 
         if a_records or ns_records or mx_records or txt_records:
             lines.append("- current_dns:")
+            _a_cap, _ns_cap, _mx_cap, _txt_cap = (10_000, 10_000, 10_000, 10_000) if full else (12, 10, 10, 8)
             if a_records:
-                lines.append(f"  A ({len(a_records)}): {', '.join(a_records[:12])}" + (f" ... (+{len(a_records)-12} more)" if len(a_records) > 12 else ""))
+                lines.append(f"  A ({len(a_records)}): {', '.join(a_records[:_a_cap])}" + (f" ... (+{len(a_records)-_a_cap} more)" if len(a_records) > _a_cap else ""))
             if ns_records:
-                lines.append(f"  NS ({len(ns_records)}): {', '.join(ns_records[:10])}" + (f" ... (+{len(ns_records)-10} more)" if len(ns_records) > 10 else ""))
+                lines.append(f"  NS ({len(ns_records)}): {', '.join(ns_records[:_ns_cap])}" + (f" ... (+{len(ns_records)-_ns_cap} more)" if len(ns_records) > _ns_cap else ""))
             if mx_records:
-                lines.append(f"  MX ({len(mx_records)}): {', '.join(mx_records[:10])}" + (f" ... (+{len(mx_records)-10} more)" if len(mx_records) > 10 else ""))
+                lines.append(f"  MX ({len(mx_records)}): {', '.join(mx_records[:_mx_cap])}" + (f" ... (+{len(mx_records)-_mx_cap} more)" if len(mx_records) > _mx_cap else ""))
             if txt_records:
-                preview = [v if len(v) <= 90 else v[:87] + "..." for v in txt_records[:8]]
-                lines.append(f"  TXT ({len(txt_records)}): " + " | ".join(preview) + (f" ... (+{len(txt_records)-8} more)" if len(txt_records) > 8 else ""))
+                shown_txt = txt_records if full else txt_records[:_txt_cap]
+                preview = [v if len(v) <= 90 else v[:87] + "..." for v in shown_txt]
+                lines.append(f"  TXT ({len(txt_records)}): " + " | ".join(preview) + (f" ... (+{len(txt_records)-_txt_cap} more)" if not full and len(txt_records) > _txt_cap else ""))
 
         subdomains = [str(v).strip() for v in as_list(payload.get("subdomains")) if str(v).strip()]
         if subdomains:
@@ -912,13 +918,13 @@ def format_enrichment_report(enrichment_data: dict) -> str:
                     if host not in high_signal:
                         high_signal.append(host)
             if high_signal:
-                cap_hs = 20
+                cap_hs = 10_000 if full else 20
                 lines.append("- high_signal_subdomains:")
                 for item in high_signal[:cap_hs]:
                     lines.append(f"  - {item}")
                 if len(high_signal) > cap_hs:
                     lines.append(f"  ... (+{len(high_signal)-cap_hs} more)")
-            cap = 30
+            cap = 10_000 if full else 30
             lines.append("- subdomains:")
             for item in subdomains[:cap]:
                 lines.append(f"  - {item}")
@@ -927,7 +933,7 @@ def format_enrichment_report(enrichment_data: dict) -> str:
 
         ip_history = [str(v).strip() for v in as_list(payload.get("ip_history")) if str(v).strip()]
         if ip_history:
-            cap = 20
+            cap = 10_000 if full else 20
             lines.append("- ip_history:")
             for item in ip_history[:cap]:
                 lines.append(f"  - {item}")

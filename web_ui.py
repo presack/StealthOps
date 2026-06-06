@@ -535,10 +535,15 @@ def build_app(
             for provider in sorted(providers.keys()):
                 payload = providers.get(provider, {})
                 risk = classify_risk(payload if isinstance(payload, dict) else {})
+                is_unsupported = isinstance(payload, dict) and str(payload.get("error", "")).startswith("unsupported_target_type")
+                if is_unsupported:
+                    btn_class = "px-3 py-1.5 text-xs rounded-md border border-slate-700/40 bg-slate-900/20 text-slate-600 italic cursor-default"
+                else:
+                    btn_class = "px-3 py-1.5 text-xs rounded-md border border-slate-700 bg-slate-900/60 text-slate-200"
                 tab_buttons.append(
                     "<button type='button' "
                     f"data-enrich-tab-btn='{html.escape(provider)}' "
-                    "class='px-3 py-1.5 text-xs rounded-md border border-slate-700 bg-slate-900/60 text-slate-200'>"
+                    f"class='{btn_class}'>"
                     + html.escape(provider)
                     + "</button>"
                 )
@@ -558,11 +563,12 @@ def build_app(
                             + "</td>"
                             "</tr>"
                         )
-                panel_body = (
-                    "<table class='w-full text-xs'><tbody>" + "".join(rows) + "</tbody></table>"
-                    if rows
-                    else "<p class='text-xs text-slate-400'>No data returned.</p>"
-                )
+                if is_unsupported:
+                    panel_body = "<p class='text-xs text-slate-500 italic'>Not applicable for this target type.</p>"
+                elif rows:
+                    panel_body = "<table class='w-full text-xs'><tbody>" + "".join(rows) + "</tbody></table>"
+                else:
+                    panel_body = "<p class='text-xs text-slate-400'>No data returned.</p>"
                 tab_panels.append(
                     "<div data-enrich-tab-panel='"
                     + html.escape(provider)

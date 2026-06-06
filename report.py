@@ -97,7 +97,7 @@ def generate_report(
 
     from formatter import format_cli_report
 
-    body_text = _safe(format_cli_report(result))
+    body_text = _safe(format_cli_report(result, full=True))
     consensus_marker = "=== ENRICHMENT CONSENSUS ==="
     if consensus_marker in body_text:
         body_text = body_text[:body_text.index(consensus_marker)].rstrip()
@@ -161,9 +161,6 @@ def generate_report(
             pdf.ln(2)
 
         else:
-            if len(line) > 140:
-                line = line[:137] + "..."
-
             lv = _LABEL_VALUE_RE.match(line)
             sl = _SUBLABEL_RE.match(line)
 

@@ -199,6 +199,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("  !<target>              forced shorthand query")
             print("  last                   show last successful target")
             print("  last clear             clear last successful target")
+            print("  full                   re-display last result with all truncation removed")
             print("  providers              list enrichment provider/key status")
             print("  quota                  show enrichment usage counters")
             print("  enrich <off|all-enabled|allip|alldns|allasn|csv>  set enrichment selection")
@@ -231,6 +232,17 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 print("")
                 continue
             print("usage: last [clear]")
+            print("")
+            continue
+
+        if cmd == "full":
+            if not last_target or last_target not in session_history:
+                print("no query results in this session — run a query first")
+                print("")
+                continue
+            from formatter import colorize_report, format_cli_report
+            data = session_history[last_target]
+            print(colorize_report(format_cli_report(data, full=True), use_color))
             print("")
             continue
 
