@@ -8,6 +8,11 @@ import shlex
 import subprocess
 import sys
 
+try:
+    import readline  # noqa: F401  enables arrow-key history for input() on Linux
+except ImportError:
+    pass
+
 from core_ops import QueryConfig, StealthQueryEngine, internet_available
 from enrichment import EnrichmentManager, PROVIDER_ALIASES
 from formatter import (
