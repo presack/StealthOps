@@ -115,7 +115,16 @@ def run_web(args: argparse.Namespace, host_override: str | None = None, port_ove
     )
     if not internet_available(timeout=1.0):
         print("[notice] internet connectivity check failed; queries will fail until connectivity returns")
-    uvicorn.run(app, host=host_override or args.host, port=port_override or args.port, use_colors=False)
+    uvicorn.run(
+        app,
+        host=host_override or args.host,
+        port=port_override or args.port,
+        use_colors=False,
+        # Trust X-Forwarded-For from localhost only (nginx reverse proxy).
+        # Keeps per-IP rate limiting correct when running behind nginx.
+        proxy_headers=True,
+        forwarded_allow_ips="127.0.0.1",
+    )
 
 
 def main() -> int:
