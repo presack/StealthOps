@@ -47,13 +47,18 @@ def render_console_banner(
         "                                        |_|          ",
     ]
     art = "\n".join(_c(use_color, line, "36") for line in art_lines)
-    return (
+    banner = (
         f"{art}\n"
         f"   {title}\n"
         "\n"
         f"{render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color)}\n"
         f"{rule}"
     )
+    from updater import get_update_notice
+    notice = get_update_notice(use_color)
+    if notice:
+        banner += f"\n{notice}"
+    return banner
 
 
 def render_status_lines(
@@ -223,6 +228,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("  report [target] [path] save PDF report for a queried indicator (default: ~/Downloads)")
             print("  clear                  clear the screen")
             print("  version                show version")
+            print("  update                 check for and apply the latest release from GitHub")
             print("  exit                   quit console")
             print("")
             continue
@@ -230,6 +236,11 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
         if cmd == "version":
             print(f"StealthOps {__version__}")
             print("")
+            continue
+
+        if cmd == "update":
+            from updater import do_update
+            do_update(use_color)
             continue
 
         if cmd == "last":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from _version import __version__
 from console import _maybe_prompt_install_tor, run_console
@@ -11,6 +12,7 @@ from enrichment import EnrichmentManager, parse_enrichment_selection
 from formatter import _c, color_enabled, interactive_stdio
 from runner import execute_enrichment_only, execute_query
 from tor_engine import TorEngine
+from updater import check_for_update_background, cleanup_old_binary, do_update, get_update_notice
 from web_ui import build_app
 
 
@@ -49,6 +51,7 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser.add_argument("--username", metavar="USERNAME", help="Target username for --set-key")
     parser.add_argument("--all-users", action="store_true", help="Apply --set-key to all existing users")
     parser.add_argument("--generate-fernet-key", action="store_true", help="Generate and print a new FERNET_KEY value")
+    parser.add_argument("--update", action="store_true", help="Check for and apply the latest release from GitHub")
     return parser, parser.parse_args()
 
 
@@ -111,6 +114,10 @@ def run_cli(args: argparse.Namespace) -> int:
             print(f"error: {exc}")
         except Exception as exc:
             print(f"error generating PDF report: {exc}")
+    if interactive_stdio():
+        notice = get_update_notice(use_color)
+        if notice:
+            print(notice)
     return rc
 
 
@@ -142,6 +149,15 @@ def run_web(args: argparse.Namespace, host_override: str | None = None, port_ove
 
 def main() -> int:
     parser, args = parse_args()
+
+    # Startup housekeeping for personal mode (skip on server/training deployments)
+    if not os.environ.get("SERVER_MODE") and not os.environ.get("TRAINING_MODE"):
+        cleanup_old_binary()
+        check_for_update_background()
+
+    if args.update:
+        do_update(use_color=color_enabled(args.no_color))
+        return 0
 
     if args.providers:
         manager = EnrichmentManager()

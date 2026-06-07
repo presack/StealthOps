@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_data_files
 from PyInstaller.utils.hooks import collect_submodules
 
 datas = []
-hiddenimports = []
+hiddenimports = ['_version']
 datas += collect_data_files('whois')
 hiddenimports += collect_submodules('uvicorn')
 hiddenimports += collect_submodules('fastapi')

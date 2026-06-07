@@ -31,8 +31,9 @@ if (git tag -l $Version) {
     exit 1
 }
 
-$WinBin   = Join-Path $ScriptDir "dist\windows\stealthops.exe"
-$LinuxBin = Join-Path $ScriptDir "dist\linux\stealthops"
+$WinBin      = Join-Path $ScriptDir "dist\windows\stealthops.exe"
+$LinuxBin    = Join-Path $ScriptDir "dist\linux\stealthops"
+$ChecksumFile = Join-Path $ScriptDir "dist\checksums.txt"
 
 # Locate gh CLI (check PATH, then common install locations)
 $GhExe = (Get-Command gh -ErrorAction SilentlyContinue)?.Source
@@ -73,6 +74,15 @@ Write-Host "=== Building Linux binary (via WSL) ===" -ForegroundColor Cyan
 wsl bash ./build-linux.sh
 if (-not (Test-Path $LinuxBin)) { Write-Error "Linux build failed — $LinuxBin not found"; exit 1 }
 
+# ── Checksums ────────────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "=== Generating checksums ===" -ForegroundColor Cyan
+$WinHash   = (Get-FileHash $WinBin   -Algorithm SHA256).Hash.ToLower()
+$LinuxHash = (Get-FileHash $LinuxBin -Algorithm SHA256).Hash.ToLower()
+"$WinHash  stealthops-windows-x64.exe`n$LinuxHash  stealthops-linux-x64" | Set-Content $ChecksumFile
+Write-Host "  $WinHash  stealthops-windows-x64.exe"
+Write-Host "  $LinuxHash  stealthops-linux-x64"
+
 # ── Tag and release ──────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== Creating release $Version ===" -ForegroundColor Cyan
@@ -88,7 +98,8 @@ $ReleaseNotes = if ($Notes) { $Notes } else {
     --title "StealthOps $Version" `
     --notes $ReleaseNotes `
     "$WinBin#stealthops-windows-x64.exe" `
-    "$LinuxBin#stealthops-linux-x64"
+    "$LinuxBin#stealthops-linux-x64" `
+    "$ChecksumFile#checksums.txt"
 
 Write-Host ""
 Write-Host "Release $Version published." -ForegroundColor Green
