@@ -881,6 +881,23 @@ def build_app(
             _form_route = f"<input type='hidden' name='route_mode' value='{html.escape(route_mode)}' />"
             _route_note = "Tor-routed where available." if route_mode == "stealth" else "Fast public route."
 
+        # Right-side nav: gear icon (personal) or user settings badge (server)
+        if training_mode:
+            _settings_nav = ""
+        elif server_mode and username:
+            _settings_nav = (
+                f"<a href='/settings' class='flex items-center gap-1.5 px-3 py-1.5 rounded-lg "
+                f"bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200'>"
+                f"<span class='text-slate-400 text-base leading-none'>⚙</span>"
+                f"<span>{html.escape(username)}</span>"
+                f"</a>"
+                f"<form method='post' action='/logout' style='display:inline'>"
+                f"<button class='text-sm text-slate-400 hover:text-white'>Sign out</button>"
+                f"</form>"
+            )
+        else:
+            _settings_nav = "<a href='/settings' class='text-slate-400 hover:text-slate-100 text-2xl leading-none' title='Settings'>⚙</a>"
+
         return f"""
 <!doctype html>
 <html>
@@ -900,7 +917,7 @@ def build_app(
       <div class='flex items-center gap-3'>
         {_hdr_badge}
         {_hdr_toggle}
-        {f"<div class='flex items-center gap-2 text-sm'><span class='text-slate-400'>{html.escape(username)}</span><a href='/account' class='text-slate-300 hover:text-white underline'>Account</a><form method='post' action='/logout' style='display:inline'><button class='text-slate-300 hover:text-white underline'>Sign out</button></form></div>" if username else ""}
+        {_settings_nav}
       </div>
     </header>
 
@@ -1357,6 +1374,284 @@ def build_app(
             )
         )
 
+    # Matches keystore.WIZARD_ORDER — keep in sync.
+    _SETTINGS_PROVIDER_ORDER = [
+        "virustotal", "viewdns", "mxtoolbox", "dnsdb", "urlscan",
+        "shodan", "censys", "spur", "abuseipdb", "greynoise",
+        "dnsdumpster", "securitytrails",
+    ]
+
+    _TARGET_LABELS: dict[tuple[str, ...], str] = {
+        ("ip", "domain", "url"): "IP · Domain · URL",
+        ("ip", "asn"): "IP · ASN",
+        ("ip",): "IP",
+        ("domain", "url"): "Domain · URL",
+    }
+
+    def _settings_target_label(provider: str) -> str:
+        spec = PROVIDER_SPECS.get(provider)
+        if not spec:
+            return ""
+        return _TARGET_LABELS.get(tuple(spec.target_types), " · ".join(spec.target_types))
+
+    def _render_settings_page(
+        request: Request,
+        error: str = "",
+        notice: str = "",
+        section: str = "api-keys",
+    ) -> str:
+        username = getattr(request.state, "username", "") if server_mode else ""
+
+        # Build key rows
+        key_rows_html = ""
+        if server_mode and username:
+            user_keys = _auth_module.get_keys(username)
+            for provider in _SETTINGS_PROVIDER_ORDER:
+                spec = PROVIDER_SPECS.get(provider)
+                if not spec or not spec.env_vars:
+                    continue
+                current = user_keys.get(provider, "")
+                masked = ("••••••••" + current[-4:]) if len(current) > 4 else ("••••" if current else "")
+                placeholder = "Leave blank to keep current" if current else "No key configured"
+                input_id = f"ki_{provider}"
+                clear_btn = (
+                    f"<button type='submit' name='clear_{html.escape(provider)}' value='1' "
+                    f"class='text-xs text-red-400 hover:text-red-300 px-2 py-1.5 rounded "
+                    f"border border-red-900/50 shrink-0'>Clear</button>"
+                ) if current else ""
+                key_rows_html += (
+                    f"<tr class='border-b border-slate-700/40 last:border-0'>"
+                    f"<td class='py-3 pr-4 align-top w-40'>"
+                    f"<div class='text-sm font-medium text-slate-200'>{html.escape(spec.display_name)}</div>"
+                    f"<div class='text-xs text-slate-500 mt-0.5'>{html.escape(_settings_target_label(provider))}</div>"
+                    f"</td>"
+                    f"<td class='py-3'>"
+                    f"<div class='flex items-center gap-2'>"
+                    f"<input id='{input_id}' name='key_{html.escape(provider)}' type='password' "
+                    f"value='{html.escape(current)}' placeholder='{html.escape(placeholder)}' "
+                    f"autocomplete='off' "
+                    f"class='flex-1 min-w-0 rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-sm font-mono'/>"
+                    f"<button type='button' onclick='toggleShow(\"{input_id}\",this)' "
+                    f"class='text-xs text-slate-400 hover:text-slate-200 px-2 py-1.5 rounded "
+                    f"border border-slate-700 shrink-0'>Show</button>"
+                    f"{clear_btn}"
+                    f"</div>"
+                    f"</td></tr>"
+                )
+        else:
+            # Personal mode — read from keystore
+            try:
+                from keystore import get_all as _ks_all
+                all_keys = _ks_all()
+            except ImportError:
+                all_keys = {}
+            for provider in _SETTINGS_PROVIDER_ORDER:
+                spec = PROVIDER_SPECS.get(provider)
+                if not spec or not spec.env_vars:
+                    continue
+                info = all_keys.get(provider, {})
+                source = info.get("source")
+                current = info.get("value", "")
+                masked_val = info.get("masked", "")
+                display = spec.display_name
+                tgt = _settings_target_label(provider)
+                input_id = f"ki_{provider}"
+
+                if source == "env":
+                    key_rows_html += (
+                        f"<tr class='border-b border-slate-700/40 last:border-0'>"
+                        f"<td class='py-3 pr-4 align-top w-40'>"
+                        f"<div class='text-sm font-medium text-slate-200'>{html.escape(display)}</div>"
+                        f"<div class='text-xs text-slate-500 mt-0.5'>{html.escape(tgt)}</div>"
+                        f"</td>"
+                        f"<td class='py-3'>"
+                        f"<div class='flex items-center gap-2'>"
+                        f"<code class='text-sm font-mono text-slate-400'>{html.escape(masked_val)}</code>"
+                        f"<span class='text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 border border-slate-600'>env</span>"
+                        f"</div>"
+                        f"<div class='text-xs text-slate-500 mt-1'>Set via environment variable — add to keys file to make editable here</div>"
+                        f"</td></tr>"
+                    )
+                else:
+                    placeholder = "Leave blank to keep current" if current else "No key configured"
+                    show_btn = (
+                        f"<button type='button' onclick='toggleShow(\"{input_id}\",this)' "
+                        f"class='text-xs text-slate-400 hover:text-slate-200 px-2 py-1.5 rounded "
+                        f"border border-slate-700 shrink-0'>Show</button>"
+                    ) if current else ""
+                    clear_btn = (
+                        f"<button type='submit' name='clear_{html.escape(provider)}' value='1' "
+                        f"class='text-xs text-red-400 hover:text-red-300 px-2 py-1.5 rounded "
+                        f"border border-red-900/50 shrink-0'>Clear</button>"
+                    ) if current else ""
+                    stored_note = (
+                        "<div class='text-xs text-slate-500 mt-1'>saved in keys file</div>"
+                    ) if source == "file" else ""
+                    key_rows_html += (
+                        f"<tr class='border-b border-slate-700/40 last:border-0'>"
+                        f"<td class='py-3 pr-4 align-top w-40'>"
+                        f"<div class='text-sm font-medium text-slate-200'>{html.escape(display)}</div>"
+                        f"<div class='text-xs text-slate-500 mt-0.5'>{html.escape(tgt)}</div>"
+                        f"</td>"
+                        f"<td class='py-3'>"
+                        f"<div class='flex items-center gap-2'>"
+                        f"<input id='{input_id}' name='key_{html.escape(provider)}' type='password' "
+                        f"value='{html.escape(current)}' placeholder='{html.escape(placeholder)}' "
+                        f"autocomplete='off' "
+                        f"class='flex-1 min-w-0 rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-sm font-mono'/>"
+                        f"{show_btn}{clear_btn}"
+                        f"</div>"
+                        f"{stored_note}"
+                        f"</td></tr>"
+                    )
+
+        err_html = f"<div class='mb-4 p-3 rounded-lg bg-red-900/30 border border-red-700 text-red-300 text-sm'>{html.escape(error)}</div>" if error else ""
+        notice_html = f"<div class='mb-4 p-3 rounded-lg bg-cyan-900/30 border border-cyan-700 text-cyan-300 text-sm'>{html.escape(notice)}</div>" if notice else ""
+
+        keys_desc = (
+            "Keys are encrypted at rest in your user profile. "
+            "Leave a field blank to keep the current value. "
+            "Clearing a key removes it from storage."
+        ) if server_mode else (
+            "Keys are saved in your local keys file. "
+            "Leave a field blank to keep the current value. "
+            "Keys set via environment variables are shown but cannot be changed here."
+        )
+
+        password_section = ""
+        if server_mode:
+            password_section = f"""
+<div data-section='password' class='hidden'>
+  <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl'>
+    <h2 class='text-lg font-semibold mb-3'>Change Password</h2>
+    <form method='post' action='/account/password' class='space-y-3 max-w-sm'>
+      <input name='old_password' type='password' placeholder='Current password'
+        class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm'/>
+      <input name='new_password' type='password' placeholder='New password'
+        class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm'/>
+      <input name='confirm_password' type='password' placeholder='Confirm new password'
+        class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm'/>
+      <button class='px-4 py-2 rounded-lg font-semibold text-white bg-cyan-600 hover:bg-cyan-500 text-sm'>Update Password</button>
+    </form>
+  </section>
+</div>"""
+
+        password_nav_item = ""
+        if server_mode:
+            password_nav_item = (
+                "<li><a href='#' onclick='showSection(\"password\");return false;' "
+                "data-nav-item='password' "
+                "class='block px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition'>"
+                "Password</a></li>"
+            )
+
+        page_title = f"Settings — {html.escape(username)}" if username else "Settings"
+
+        return f"""<!doctype html><html>
+<head><meta charset='utf-8'/><meta name='viewport' content='width=device-width,initial-scale=1'/>
+<title>StealthOps — Settings</title><script src='{TAILWIND_CDN}'></script></head>
+<body class='bg-slate-950 text-slate-100 min-h-screen'>
+<main class='max-w-4xl mx-auto p-6'>
+  <header class='flex items-center justify-between mb-8'>
+    <h1 class='text-2xl font-bold'>{page_title}</h1>
+    <a href='/' class='text-sm text-slate-400 hover:text-white'>← Back to StealthOps</a>
+  </header>
+
+  <div class='flex gap-6'>
+    <nav class='w-44 shrink-0'>
+      <p class='text-xs text-slate-500 uppercase tracking-wider mb-3 px-3'>Settings</p>
+      <ul class='space-y-1'>
+        <li><a href='#' onclick='showSection("api-keys");return false;'
+          data-nav-item='api-keys'
+          class='block px-3 py-2 rounded-lg text-sm transition'>API Keys</a></li>
+        {password_nav_item}
+      </ul>
+    </nav>
+
+    <div class='flex-1 min-w-0'>
+      {err_html}{notice_html}
+
+      <div data-section='api-keys'>
+        <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl'>
+          <h2 class='text-lg font-semibold mb-1'>API Keys</h2>
+          <p class='text-slate-400 text-xs mb-4'>{html.escape(keys_desc)}</p>
+          <form method='post' action='/settings'>
+            <table class='w-full'><tbody>{key_rows_html}</tbody></table>
+            <button type='submit' class='mt-5 px-4 py-2 rounded-lg font-semibold text-white bg-cyan-600 hover:bg-cyan-500 text-sm'>Save Keys</button>
+          </form>
+        </section>
+      </div>
+
+      {password_section}
+    </div>
+  </div>
+</main>
+<script>
+function toggleShow(id, btn) {{
+  var inp = document.getElementById(id);
+  if (!inp) return;
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  btn.textContent = inp.type === 'password' ? 'Show' : 'Hide';
+}}
+function showSection(name) {{
+  document.querySelectorAll('[data-section]').forEach(function(el) {{
+    el.classList.toggle('hidden', el.dataset.section !== name);
+  }});
+  document.querySelectorAll('[data-nav-item]').forEach(function(a) {{
+    var active = a.dataset.navItem === name;
+    a.classList.toggle('bg-slate-800', active);
+    a.classList.toggle('text-slate-100', active);
+    a.classList.toggle('text-slate-400', !active);
+  }});
+}}
+document.addEventListener('DOMContentLoaded', function() {{ showSection('{html.escape(section)}'); }});
+</script>
+</body></html>"""
+
+    @app.get("/settings", response_class=HTMLResponse)
+    async def settings_get(request: Request) -> HTMLResponse:
+        if training_mode:
+            return HTMLResponse("Not available in training mode.", status_code=404)
+        return HTMLResponse(_render_settings_page(request))
+
+    @app.post("/settings", response_class=HTMLResponse)
+    async def settings_post(request: Request) -> HTMLResponse:
+        if training_mode:
+            return HTMLResponse("Not available in training mode.", status_code=404)
+        form_data = await request.form()
+        username = getattr(request.state, "username", "") if server_mode else ""
+        changes = 0
+
+        for provider in _SETTINGS_PROVIDER_ORDER:
+            spec = PROVIDER_SPECS.get(provider)
+            if not spec or not spec.env_vars:
+                continue
+            if str(form_data.get(f"clear_{provider}", "")).strip():
+                if server_mode and username:
+                    _auth_module.delete_key(username, provider)
+                else:
+                    try:
+                        from keystore import delete_key as _ks_del
+                        _ks_del(provider)
+                    except ImportError:
+                        pass
+                changes += 1
+                continue
+            value = str(form_data.get(f"key_{provider}", "")).strip()
+            if value:
+                if server_mode and username:
+                    _auth_module.set_key(username, provider, value)
+                else:
+                    try:
+                        from keystore import set_key as _ks_set
+                        _ks_set(provider, value)
+                    except ImportError:
+                        pass
+                changes += 1
+
+        notice = f"{changes} key(s) updated." if changes else "No changes made."
+        return HTMLResponse(_render_settings_page(request, notice=notice))
+
     if server_mode:
         def _render_login(error: str = "") -> str:
             err_html = f"<p class='text-red-400 mt-3 text-sm'>{html.escape(error)}</p>" if error else ""
@@ -1457,7 +1752,8 @@ def build_app(
 
         @app.get("/account", response_class=HTMLResponse)
         async def account_page(request: Request) -> HTMLResponse:
-            return HTMLResponse(_render_account(request))
+            from starlette.responses import RedirectResponse
+            return RedirectResponse(url="/settings", status_code=302)
 
         @app.post("/account/password", response_class=HTMLResponse)
         async def account_change_password(
@@ -1468,24 +1764,11 @@ def build_app(
         ) -> HTMLResponse:
             username = getattr(request.state, "username", "")
             if new_password != confirm_password:
-                return HTMLResponse(_render_account(request, error="New passwords do not match."))
+                return HTMLResponse(_render_settings_page(request, error="New passwords do not match.", section="password"))
             if not new_password:
-                return HTMLResponse(_render_account(request, error="New password cannot be empty."))
+                return HTMLResponse(_render_settings_page(request, error="New password cannot be empty.", section="password"))
             if _auth_module.change_password(username, old_password, new_password):
-                return HTMLResponse(_render_account(request, notice="Password updated successfully."))
-            return HTMLResponse(_render_account(request, error="Current password is incorrect."))
-
-        @app.post("/account/keys", response_class=HTMLResponse)
-        async def account_save_keys(request: Request) -> HTMLResponse:
-            username = getattr(request.state, "username", "")
-            form_data = await request.form()
-            from enrichment import PROVIDER_SPECS as _PS
-            for pname in _PS.keys():
-                value = str(form_data.get(f"key_{pname}", "")).strip()
-                if value:
-                    _auth_module.set_key(username, pname, value)
-                else:
-                    _auth_module.delete_key(username, pname)
-            return HTMLResponse(_render_account(request, notice="API keys saved."))
+                return HTMLResponse(_render_settings_page(request, notice="Password updated successfully.", section="password"))
+            return HTMLResponse(_render_settings_page(request, error="Current password is incorrect.", section="password"))
 
     return app

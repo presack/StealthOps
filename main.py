@@ -15,6 +15,9 @@ from tor_engine import TorEngine
 from updater import check_for_update_background, cleanup_old_binary, do_update, get_update_notice
 from web_ui import build_app
 
+_SERVER_MODE  = bool(os.environ.get("SERVER_MODE"))
+_TRAINING_MODE = bool(os.environ.get("TRAINING_MODE"))
+
 
 def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser = argparse.ArgumentParser(description="StealthOps - privacy-hardened reconnaissance utility")
@@ -52,6 +55,8 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser.add_argument("--all-users", action="store_true", help="Apply --set-key to all existing users")
     parser.add_argument("--generate-fernet-key", action="store_true", help="Generate and print a new FERNET_KEY value")
     parser.add_argument("--update", action="store_true", help="Check for and apply the latest release from GitHub")
+    parser.add_argument("--configure-keys", action="store_true", help="Interactive API key setup wizard (personal mode)")
+    parser.add_argument("--keys", action="store_true", help="Show API key status for all enrichment providers (personal mode)")
     return parser, parser.parse_args()
 
 
@@ -151,12 +156,39 @@ def main() -> int:
     parser, args = parse_args()
 
     # Startup housekeeping for personal mode (skip on server/training deployments)
-    if not os.environ.get("SERVER_MODE") and not os.environ.get("TRAINING_MODE"):
+    if not _SERVER_MODE and not _TRAINING_MODE:
+        from keystore import load_into_environ
+        load_into_environ()
         cleanup_old_binary()
         check_for_update_background()
 
     if args.update:
         do_update(use_color=color_enabled(args.no_color))
+        return 0
+
+    if args.configure_keys:
+        if _SERVER_MODE:
+            print("In SERVER_MODE, manage keys via the web UI at /settings")
+            return 0
+        from keystore import run_setup_wizard
+        run_setup_wizard()
+        return 0
+
+    if args.keys:
+        if _SERVER_MODE:
+            print("In SERVER_MODE, manage keys via the web UI at /settings")
+            return 0
+        from keystore import get_all, mask
+        use_color = color_enabled(args.no_color)
+        all_keys = get_all()
+        print("")
+        for provider, info in all_keys.items():
+            source = info["source"]
+            masked = info["masked"] or "(not set)"
+            src_tag = f"  [{info['source']}]" if source else ""
+            line = f"  {info['display_name']:<22} {masked}{src_tag}"
+            print(line)
+        print("")
         return 0
 
     if args.providers:
@@ -175,6 +207,16 @@ def main() -> int:
         args.set_key, args.delete_key, args.copy_keys,
     ])
     if _admin_cmds:
+        # Personal mode --set-key: write to keystore, no auth module needed
+        if args.set_key and not _SERVER_MODE:
+            from keystore import set_key as _ks_set
+            provider, key = args.set_key
+            if _ks_set(provider.lower(), key):
+                print(f"key saved for {provider}")
+            else:
+                print(f"error: unknown provider '{provider}'")
+            return 0
+
         import auth as _auth
         import getpass
 

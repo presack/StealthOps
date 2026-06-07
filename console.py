@@ -229,6 +229,9 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("  clear                  clear the screen")
             print("  version                show version")
             print("  update                 check for and apply the latest release from GitHub")
+            print("  keys                   show API key status for all enrichment providers")
+            print("  set-key [provider key] set a provider API key (no args = interactive wizard)")
+            print("  delete-key <provider>  remove a provider API key from local storage")
             print("  exit                   quit console")
             print("")
             continue
@@ -241,6 +244,70 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
         if cmd == "update":
             from updater import do_update
             do_update(use_color)
+            continue
+
+        if cmd == "keys":
+            import os as _os
+            if _os.environ.get("SERVER_MODE"):
+                print("In SERVER_MODE — manage keys via the web UI at /settings")
+                print("")
+                continue
+            from keystore import get_all as _ks_all
+            all_keys = _ks_all()
+            print("")
+            for provider, info in all_keys.items():
+                source = info["source"]
+                masked = info["masked"] or _c(use_color, "(not set)", "90")
+                src_tag = _c(use_color, f"  [{source}]", "90") if source else ""
+                disp = _c(use_color, info["display_name"], "97")
+                print(f"  {disp:<30} {masked}{src_tag}")
+            print("")
+            continue
+
+        if cmd == "set-key":
+            import os as _os
+            if _os.environ.get("SERVER_MODE"):
+                print("In SERVER_MODE — manage keys via the web UI at /settings")
+                print("")
+                continue
+            if len(parts) == 1:
+                from keystore import run_setup_wizard
+                run_setup_wizard()
+            elif len(parts) == 3:
+                from keystore import set_key as _ks_set, WIZARD_ORDER as _WO
+                provider_arg = parts[1].lower()
+                if provider_arg not in _WO:
+                    print(f"error: unknown provider '{parts[1]}'")
+                    print(f"  known providers: {', '.join(_WO)}")
+                elif _ks_set(provider_arg, parts[2]):
+                    print(f"key saved for {parts[1]}")
+                else:
+                    print(f"error: could not save key for '{parts[1]}'")
+            else:
+                print("usage: set-key [provider key]")
+            print("")
+            continue
+
+        if cmd == "delete-key":
+            import os as _os
+            if _os.environ.get("SERVER_MODE"):
+                print("In SERVER_MODE — manage keys via the web UI at /settings")
+                print("")
+                continue
+            if len(parts) != 2:
+                print("usage: delete-key <provider>")
+                print("")
+                continue
+            from keystore import delete_key as _ks_del, WIZARD_ORDER as _WO
+            provider_arg = parts[1].lower()
+            if provider_arg not in _WO:
+                print(f"error: unknown provider '{parts[1]}'")
+                print(f"  known providers: {', '.join(_WO)}")
+            elif _ks_del(provider_arg):
+                print(f"key removed for {parts[1]}")
+            else:
+                print(f"error: could not remove key for '{parts[1]}'")
+            print("")
             continue
 
         if cmd == "last":
