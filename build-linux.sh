@@ -39,6 +39,7 @@ echo "==> Running PyInstaller"
   --collect-submodules uvicorn \
   --collect-submodules fastapi \
   --collect-submodules starlette \
+  --hidden-import _version \
   "$SCRIPT_DIR/main.py"
 
 echo "Build complete: $SCRIPT_DIR/dist/linux/stealthops"

@@ -41,7 +41,8 @@ $pyiArgs = @(
     "--collect-data", "whois",
     "--collect-submodules", "uvicorn",
     "--collect-submodules", "fastapi",
-    "--collect-submodules", "starlette"
+    "--collect-submodules", "starlette",
+    "--hidden-import", "_version"
 )
 if (Test-Path ".\vendor\tor") {
     Write-Host "Bundling Tor runtime from .\vendor\tor"
