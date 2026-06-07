@@ -31,8 +31,10 @@ if (git tag -l $Version) {
     exit 1
 }
 
-$WinBin      = Join-Path $ScriptDir "dist\windows\stealthops.exe"
-$LinuxBin    = Join-Path $ScriptDir "dist\linux\stealthops"
+$WinBin       = Join-Path $ScriptDir "dist\windows\stealthops.exe"
+$LinuxBin     = Join-Path $ScriptDir "dist\linux\stealthops"
+$WinUpload    = Join-Path $ScriptDir "dist\stealthops-windows-x64.exe"
+$LinuxUpload  = Join-Path $ScriptDir "dist\stealthops-linux-x64"
 $ChecksumFile = Join-Path $ScriptDir "dist\checksums.txt"
 
 # Locate gh CLI (check PATH, then common install locations)
@@ -77,8 +79,10 @@ if (-not (Test-Path $LinuxBin)) { Write-Error "Linux build failed — $LinuxBin 
 # ── Checksums ────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== Generating checksums ===" -ForegroundColor Cyan
-$WinHash   = (Get-FileHash $WinBin   -Algorithm SHA256).Hash.ToLower()
-$LinuxHash = (Get-FileHash $LinuxBin -Algorithm SHA256).Hash.ToLower()
+Copy-Item $WinBin   $WinUpload   -Force
+Copy-Item $LinuxBin $LinuxUpload -Force
+$WinHash   = (Get-FileHash $WinUpload   -Algorithm SHA256).Hash.ToLower()
+$LinuxHash = (Get-FileHash $LinuxUpload -Algorithm SHA256).Hash.ToLower()
 "$WinHash  stealthops-windows-x64.exe`n$LinuxHash  stealthops-linux-x64" | Set-Content $ChecksumFile
 Write-Host "  $WinHash  stealthops-windows-x64.exe"
 Write-Host "  $LinuxHash  stealthops-linux-x64"
@@ -91,15 +95,16 @@ git tag $Version
 git push origin $Version
 
 $ReleaseNotes = if ($Notes) { $Notes } else {
-    "StealthOps $Version`n`nPrivacy-hardened OSINT/reconnaissance utility.`n`n**Downloads**`n- ``stealthops.exe`` — Windows x64`n- ``stealthops`` — Linux x64 (glibc)"
+    "StealthOps $Version`n`nPrivacy-hardened OSINT/reconnaissance utility.`n`n**Downloads**`n- ``stealthops-windows-x64.exe`` — Windows x64`n- ``stealthops-linux-x64`` — Linux x64 (glibc)`n`n**Install (Windows)**`n````powershell`nirm https://github.com/presack/StealthOps/releases/latest/download/install.ps1 | iex`n```"
 }
 
 & $GhExe release create $Version `
     --title "StealthOps $Version" `
     --notes $ReleaseNotes `
-    "$WinBin#stealthops-windows-x64.exe" `
-    "$LinuxBin#stealthops-linux-x64" `
-    "$ChecksumFile#checksums.txt"
+    $WinUpload `
+    $LinuxUpload `
+    "$ChecksumFile#checksums.txt" `
+    "install.ps1#install.ps1"
 
 Write-Host ""
 Write-Host "Release $Version published." -ForegroundColor Green
