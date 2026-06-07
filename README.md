@@ -163,17 +163,62 @@ Full release (stamps version, builds both, creates GitHub release):
 .\release.ps1 v1.2.3
 ```
 
-## Server mode
+## Deployment modes
 
-For multi-user deployments (training events, shared access):
+StealthOps runs in three modes:
 
-```powershell
-SERVER_MODE=1 FERNET_KEY=<key> stealthops --web
-python main.py --generate-fernet-key   # generate key
-python main.py --create-user alice     # add users
+| Mode | How to activate | Auth | API keys |
+|---|---|---|---|
+| **Personal** | default | none | env vars or `--configure-keys` |
+| **Server** | `SERVER_MODE=1` | form login (cookie session) | per-user, encrypted in SQLite |
+| **Training** | `TRAINING_MODE=1` | HTTP Basic Auth | env vars, shared across all users |
+
+### Server mode (multi-user)
+
+Server mode adds user accounts and per-user encrypted API key storage. Each user logs in with a username and password and manages their own keys via the web Settings page.
+
+```bash
+# 1. Generate an encryption key (do once, store securely)
+python main.py --generate-fernet-key
+
+# 2. Create users
+python main.py --create-user alice
+python main.py --list-users
+
+# 3. Run
+SERVER_MODE=1 FERNET_KEY=<key> python main.py --web
 ```
 
-See `CLAUDE.md` for full server and cloud deployment documentation.
+### Training mode (hosted events)
+
+Training mode is for short-lived shared deployments — a class or workshop where multiple participants share one instance. It enables HTTP Basic Auth, a 24-hour result cache, elevated rate limits, and locks enrichment to `all-enabled` (provider selection is hidden from users).
+
+```bash
+TRAINING_MODE=1 TRAINING_AUTH_USER=stealthops TRAINING_AUTH_PASS=<passphrase> python main.py --web
+```
+
+### Cloud / Docker deployment
+
+The `deploy/` directory contains scripts for GCP-based deployments:
+
+| Script | Purpose |
+|---|---|
+| `deploy/create-vm.sh` | Provision a GCP e2-small VM, open firewall ports, print IP |
+| `deploy/vm-setup.sh` | Run on the VM: install Docker + nginx, issue a Let's Encrypt cert, start the container |
+| `deploy/nginx.conf` | nginx config template (TLS termination, proxy to uvicorn) |
+
+The stack is Docker + docker-compose, nginx reverse proxy, Let's Encrypt TLS. The result cache persists in a named Docker volume across container restarts.
+
+```bash
+# On GCP Cloud Shell — provision VM
+bash deploy/create-vm.sh <name> <gcp-project-id> <zone>
+
+# SSH into VM, clone repo, create .env, then run setup
+bash deploy/vm-setup.sh <subdomain.yourdomain.com> <email>
+
+# Redeploy after a code change
+git pull && sudo docker compose up -d --build
+```
 
 ## License
 

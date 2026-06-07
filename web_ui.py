@@ -881,11 +881,18 @@ def build_app(
             _form_route = f"<input type='hidden' name='route_mode' value='{html.escape(route_mode)}' />"
             _route_note = "Tor-routed where available." if route_mode == "stealth" else "Fast public route."
 
+        # Download link — always visible
+        _download_nav = (
+            "<a href='/download' class='text-slate-400 hover:text-slate-100 text-sm leading-none' "
+            "title='Download / Install StealthOps'>&#8595; Install</a>"
+        )
+
         # Right-side nav: gear icon (personal) or user settings badge (server)
         if training_mode:
-            _settings_nav = ""
+            _settings_nav = _download_nav
         elif server_mode and username:
             _settings_nav = (
+                f"{_download_nav}"
                 f"<a href='/settings' class='flex items-center gap-1.5 px-3 py-1.5 rounded-lg "
                 f"bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200'>"
                 f"<span class='text-slate-400 text-base leading-none'>⚙</span>"
@@ -896,7 +903,10 @@ def build_app(
                 f"</form>"
             )
         else:
-            _settings_nav = "<a href='/settings' class='text-slate-400 hover:text-slate-100 text-2xl leading-none' title='Settings'>⚙</a>"
+            _settings_nav = (
+                f"{_download_nav}"
+                f"<a href='/settings' class='text-slate-400 hover:text-slate-100 text-2xl leading-none' title='Settings'>⚙</a>"
+            )
 
         return f"""
 <!doctype html>
@@ -1651,6 +1661,59 @@ document.addEventListener('DOMContentLoaded', function() {{ showSection('{html.e
 
         notice = f"{changes} key(s) updated." if changes else "No changes made."
         return HTMLResponse(_render_settings_page(request, notice=notice))
+
+    _REPO_URL = "https://github.com/presack/StealthOps"
+    _RELEASES_URL = f"{_REPO_URL}/releases/latest"
+    _WIN_CMD  = "irm https://github.com/presack/StealthOps/releases/latest/download/install.ps1 | iex"
+    _LIN_CMD  = "curl -fsSL https://github.com/presack/StealthOps/releases/latest/download/install.sh | bash"
+
+    @app.get("/download", response_class=HTMLResponse)
+    async def download_page(request: Request) -> HTMLResponse:
+        ua = request.headers.get("user-agent", "").lower()
+        is_windows = "windows" in ua
+
+        def _cmd_block(label: str, sublabel: str, cmd: str, copy_id: str, primary: bool) -> str:
+            heading_cls = "text-lg font-semibold mb-1" if primary else "text-base font-medium mb-1 text-slate-300"
+            box_cls = "bg-slate-900 border border-slate-700 rounded-lg p-4" if primary else "bg-slate-950 border border-slate-800 rounded-lg p-3"
+            return f"""
+<div class='{box_cls} mb-4'>
+  <p class='{heading_cls}'>{label}</p>
+  <p class='text-xs text-slate-400 mb-2'>{sublabel}</p>
+  <div class='flex items-center gap-2'>
+    <code id='{copy_id}' class='flex-1 text-sm text-cyan-300 break-all'>{html.escape(cmd)}</code>
+    <button onclick="navigator.clipboard.writeText(document.getElementById('{copy_id}').textContent).then(()=>{{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)}})"
+      class='shrink-0 px-3 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-200'>Copy</button>
+  </div>
+</div>"""
+
+        if is_windows:
+            primary_block = _cmd_block("Windows", "Open PowerShell — no admin required", _WIN_CMD, "win-cmd", True)
+            secondary_block = _cmd_block("Linux (x86_64)", "Run in your terminal", _LIN_CMD, "lin-cmd", False)
+        else:
+            primary_block = _cmd_block("Linux (x86_64)", "Run in your terminal", _LIN_CMD, "lin-cmd", True)
+            secondary_block = _cmd_block("Windows", "Open PowerShell — no admin required", _WIN_CMD, "win-cmd", False)
+
+        return HTMLResponse(f"""<!doctype html><html>
+<head><meta charset='utf-8'/><meta name='viewport' content='width=device-width,initial-scale=1'/>
+<title>Install StealthOps</title><script src='{TAILWIND_CDN}'></script></head>
+<body class='bg-slate-950 text-slate-100 min-h-screen'>
+<main class='max-w-2xl mx-auto p-8'>
+  <div class='mb-6'>
+    <a href='/' class='text-slate-400 hover:text-slate-200 text-sm'>&#8592; Back</a>
+  </div>
+  <h1 class='text-3xl font-bold mb-1'>Install StealthOps</h1>
+  <p class='text-slate-400 text-sm mb-8'>Privacy-hardened OSINT &amp; reconnaissance utility</p>
+  {primary_block}
+  <p class='text-xs text-slate-500 mb-6'>Opens a new terminal and run: <code class='text-slate-300'>stealthops --console</code></p>
+  <hr class='border-slate-800 mb-6'/>
+  <p class='text-sm text-slate-400 mb-3'>Other platforms</p>
+  {secondary_block}
+  <p class='text-xs text-slate-500 mt-6'>
+    Direct downloads and release notes on
+    <a href='{html.escape(_RELEASES_URL)}' class='text-cyan-400 hover:underline' target='_blank'>GitHub Releases</a>.
+  </p>
+</main>
+</body></html>""")
 
     if server_mode:
         def _render_login(error: str = "") -> str:

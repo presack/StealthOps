@@ -94,7 +94,8 @@ Write-Host "=== Creating release $Version ===" -ForegroundColor Cyan
 git tag $Version
 git push origin $Version
 
-$InstallLine = "irm https://github.com/presack/StealthOps/releases/latest/download/install.ps1 | iex"
+$InstallLine      = "irm https://github.com/presack/StealthOps/releases/latest/download/install.ps1 | iex"
+$LinuxInstallLine = "curl -fsSL https://github.com/presack/StealthOps/releases/latest/download/install.sh | bash"
 $ReleaseNotes = if ($Notes) { $Notes } else {
 @"
 StealthOps $Version
@@ -108,6 +109,12 @@ Open PowerShell and run:
 ``````powershell
 $InstallLine
 ``````
+
+**Install (Linux x86_64)**
+
+```bash
+$LinuxInstallLine
+```
 
 **Downloads**
 - ``stealthops-windows-x64.exe`` — Windows x64
