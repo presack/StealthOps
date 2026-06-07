@@ -11,7 +11,7 @@ hiddenimports += collect_submodules('starlette')
 
 
 a = Analysis(
-    ['main.py'],
+    ['/mnt/c/Users/gener/Documents/Github/StealthOps/main.py'],
     pathex=[],
     binaries=[],
     datas=datas,
