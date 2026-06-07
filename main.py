@@ -305,7 +305,7 @@ def main() -> int:
             use_color = color_enabled(args.no_color)
             print("")
             print(_c(use_color, "Quick Start", "1;96"))
-            print(f"  {_c(use_color, '1', '1;93')}. {_c(use_color, 'Start Web Server', '92')}")
+            print(f"  {_c(use_color, '1', '1;93')}. {_c(use_color, 'Start Web + Console', '92')}")
             print(f"  {_c(use_color, '2', '1;93')}. {_c(use_color, 'Start Console', '92')}")
             print(f"  {_c(use_color, '3', '1;93')}. {_c(use_color, 'Exit', '92')}")
             prompt = f"{_c(use_color, '>', '96')} Select option [Enter to exit]: " if use_color else "Select option [Enter to exit]: "
@@ -314,8 +314,14 @@ def main() -> int:
             except EOFError:
                 return 0
             if choice == "1":
-                run_web(args)
-                return 0
+                from console import run_web_background
+                tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
+                host = args.host
+                port = args.port
+                web_process = run_web_background(args, host_override=host, port_override=port)
+                print(f"[web] pid={web_process.pid} url=http://{host}:{port}")
+                print("")
+                return run_console(args, tor_engine)
             if choice == "2":
                 tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))
                 return run_console(args, tor_engine)
