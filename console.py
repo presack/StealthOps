@@ -13,6 +13,7 @@ try:
 except ImportError:
     pass
 
+from _version import __version__
 from core_ops import QueryConfig, StealthQueryEngine, internet_available
 from enrichment import EnrichmentManager, PROVIDER_ALIASES
 from formatter import (
@@ -35,7 +36,7 @@ def render_console_banner(
     emit_json: bool,
     use_color: bool,
 ) -> str:
-    title = _c(use_color, "[ PRIVACY-CENTRIC NETWORK INTELLIGENCE ]", "92")
+    title = _c(use_color, f"[ PRIVACY-CENTRIC NETWORK INTELLIGENCE ]  v{__version__}", "92")
     rule = _c(use_color, "  _____________________________________________________________", "90")
     art_lines = [
         "  ____  _             _ _   _      ___               ",
@@ -221,7 +222,13 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("  headers <on|off>       toggle HTTP header inspection")
             print("  report [target] [path] save PDF report for a queried indicator (default: ~/Downloads)")
             print("  clear                  clear the screen")
+            print("  version                show version")
             print("  exit                   quit console")
+            print("")
+            continue
+
+        if cmd == "version":
+            print(f"StealthOps {__version__}")
             print("")
             continue
 

@@ -38,8 +38,8 @@ $LinuxBin = Join-Path $ScriptDir "dist\linux\stealthops"
 $GhExe = (Get-Command gh -ErrorAction SilentlyContinue)?.Source
 if (-not $GhExe) {
     foreach ($candidate in @(
-        "$env:LOCALAPPDATA\Programs\GitHub CLI\gh.exe",
         "C:\Program Files\GitHub CLI\gh.exe",
+        "$env:LOCALAPPDATA\Programs\GitHub CLI\gh.exe",
         "$env:ProgramFiles\GitHub CLI\gh.exe"
     )) {
         if (Test-Path $candidate) { $GhExe = $candidate; break }
@@ -53,6 +53,13 @@ if (-not $GhExe) {
         '${LinuxBin}#stealthops-linux-x64'")
     exit 1
 }
+
+# ── Stamp version ────────────────────────────────────────────────────────────
+$VersionNum = $Version.TrimStart("v")
+Set-Content (Join-Path $ScriptDir "_version.py") "__version__ = `"$VersionNum`"`n"
+git add "_version.py"
+git commit -m "Bump version to $Version"
+git push
 
 # ── Build Windows ────────────────────────────────────────────────────────────
 Write-Host ""

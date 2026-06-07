@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from _version import __version__
 from console import _maybe_prompt_install_tor, run_console
 from core_ops import QueryConfig, StealthQueryEngine, internet_available
 from enrichment import EnrichmentManager, parse_enrichment_selection
@@ -15,6 +16,7 @@ from web_ui import build_app
 
 def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser = argparse.ArgumentParser(description="StealthOps - privacy-hardened reconnaissance utility")
+    parser.add_argument("--version", action="version", version=f"StealthOps {__version__}")
     parser.add_argument("target", nargs="?", help="Domain/URL/IP target for CLI mode")
     parser.add_argument("--query", help="Domain/URL target for CLI mode")
     parser.add_argument("--web", action="store_true", help="Run web server mode")
