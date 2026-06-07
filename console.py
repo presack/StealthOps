@@ -189,6 +189,17 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
         if not raw:
             continue
 
+        # Re-sync keystore file → os.environ and rebuild the enrichment manager
+        # so keys saved externally (web UI, another terminal) take effect
+        # immediately without restarting the console.
+        if not os.environ.get("SERVER_MODE") and not os.environ.get("TRAINING_MODE"):
+            try:
+                from keystore import sync_into_environ as _ks_sync
+                _ks_sync()
+                enrichment_manager = EnrichmentManager()
+            except ImportError:
+                pass
+
         try:
             parts = shlex.split(raw)
         except ValueError as exc:

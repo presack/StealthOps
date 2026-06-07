@@ -121,7 +121,8 @@ $InstallLine
     $WinUpload `
     $LinuxUpload `
     "$ChecksumFile#checksums.txt" `
-    "install.ps1#install.ps1"
+    "install.ps1#install.ps1" `
+    "install.sh#install.sh"
 
 Write-Host ""
 Write-Host "Release $Version published." -ForegroundColor Green

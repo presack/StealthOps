@@ -47,6 +47,12 @@ def _target_label(provider: str) -> str:
 
 
 def _keys_dir() -> Path:
+    # STEALTHOPS_KEYS_DIR lets WSL2 point at the Windows key store so both
+    # the Windows and Linux binaries share the same keys.env file.
+    # Set automatically by the installer; can also be set manually.
+    override = os.environ.get("STEALTHOPS_KEYS_DIR")
+    if override:
+        return Path(override)
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
         return Path(base) / "StealthOps"
@@ -93,6 +99,20 @@ def load_into_environ() -> None:
     for env_var, value in _read_file().items():
         if env_var not in os.environ and value:
             os.environ[env_var] = value
+
+
+def sync_into_environ() -> None:
+    """Re-read the keys file and overwrite os.environ with current values.
+
+    Unlike load_into_environ, this always applies file values so that keys
+    changed externally (web UI in another process, another terminal) are
+    picked up immediately. Called on each console REPL iteration.
+    """
+    for env_var, value in _read_file().items():
+        if value:
+            os.environ[env_var] = value
+        else:
+            os.environ.pop(env_var, None)
 
 
 def set_key(provider: str, key: str) -> bool:

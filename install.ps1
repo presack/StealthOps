@@ -152,24 +152,41 @@ $WslConfigured = $false
 if (-not $NoWsl -and $LinuxDest -and (Get-Command wsl -ErrorAction SilentlyContinue)) {
     Write-Step "Configuring WSL2..."
     try {
-        # Convert the Windows install path to its WSL mount equivalent
-        $WslSrc = (wsl wslpath -u ($LinuxDest -replace '\\', '/')).Trim()
-        # Pass the path as an env var; the here-string is single-quoted so
-        # PowerShell does not expand $HOME/$PATH inside the bash script.
+        # Convert Windows paths to their WSL2 mount equivalents
+        $WslSrc     = (wsl wslpath -u ($LinuxDest -replace '\\', '/')).Trim()
+        $WinKeysDir = Join-Path $env:LOCALAPPDATA "StealthOps"
+        $WslKeysDir = (wsl wslpath -u ($WinKeysDir -replace '\\', '/')).Trim()
+
+        # Both paths are passed as env vars so the single-quoted here-string
+        # (which PowerShell does not interpolate) can reference them in bash.
         $BashScript = @'
 set -e
 chmod +x "$STEALTHOPS_SRC"
 mkdir -p ~/.local/bin
 ln -sf "$STEALTHOPS_SRC" ~/.local/bin/stealthops
+
+# Add ~/.local/bin to PATH
 grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' ~/.bashrc 2>/dev/null \
   || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 if [ -f ~/.zshrc ]; then
   grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' ~/.zshrc \
     || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 fi
+
+# Point the Linux binary at the Windows keys store so both binaries share
+# the same keys.env file and API keys only need to be entered once.
+mkdir -p "$STEALTHOPS_KEYS_DIR"
+KEYS_LINE="export STEALTHOPS_KEYS_DIR=\"$STEALTHOPS_KEYS_DIR\""
+grep -qF "STEALTHOPS_KEYS_DIR" ~/.bashrc 2>/dev/null \
+  || echo "$KEYS_LINE" >> ~/.bashrc
+if [ -f ~/.zshrc ]; then
+  grep -qF "STEALTHOPS_KEYS_DIR" ~/.zshrc \
+    || echo "$KEYS_LINE" >> ~/.zshrc
+fi
 '@
-        wsl env "STEALTHOPS_SRC=$WslSrc" bash -c $BashScript
+        wsl env "STEALTHOPS_SRC=$WslSrc" "STEALTHOPS_KEYS_DIR=$WslKeysDir" bash -c $BashScript
         Write-Ok "Symlinked in WSL2 ~/.local/bin/stealthops"
+        Write-Ok "WSL2 will share API keys with Windows ($WslKeysDir)"
         $WslConfigured = $true
     } catch {
         Write-Warn "WSL2 setup skipped: $_"

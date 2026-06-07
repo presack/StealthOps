@@ -2,36 +2,35 @@
 
 Privacy-hardened OSINT/reconnaissance utility. DNS, WHOIS, MX, HTTP headers, and 13+ threat-intel enrichment providers — routed through Tor when you want it.
 
-## Install (Windows)
+## Install
 
-Open PowerShell and run:
+**Windows** (PowerShell — no admin required):
 
 ```powershell
 irm https://github.com/presack/StealthOps/releases/latest/download/install.ps1 | iex
 ```
 
-This installs `stealthops.exe` to `%LOCALAPPDATA%\Programs\StealthOps\`, adds it to your PATH, and sets up the Linux binary in WSL2 if available. No admin rights required.
+Installs to `%LOCALAPPDATA%\Programs\StealthOps\`, adds to PATH, and sets up the Linux binary in WSL2 automatically. Windows and WSL2 share the same API key store so keys only need to be entered once.
 
-Then open a new terminal and run:
+**Linux** (x86_64):
 
-```powershell
+```bash
+curl -fsSL https://github.com/presack/StealthOps/releases/latest/download/install.sh | bash
+```
+
+Installs to `~/.local/bin/`, adds to PATH in `.bashrc`/`.zshrc`. SHA256-verified.
+
+After installing, open a new terminal and run:
+
+```
 stealthops --console
 ```
 
 To configure enrichment provider API keys:
 
-```powershell
+```
 stealthops --configure-keys
 ```
-
-## Install (Linux / WSL2)
-
-```bash
-curl -fsSL https://github.com/presack/StealthOps/releases/latest/download/stealthops-linux-x64 -o stealthops
-chmod +x stealthops && mv stealthops ~/.local/bin/stealthops
-```
-
-Or let the Windows installer handle it — it sets up the Linux binary in WSL2 automatically.
 
 ## Usage
 
