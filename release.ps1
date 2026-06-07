@@ -34,6 +34,26 @@ if (git tag -l $Version) {
 $WinBin   = Join-Path $ScriptDir "dist\windows\stealthops.exe"
 $LinuxBin = Join-Path $ScriptDir "dist\linux\stealthops"
 
+# Locate gh CLI (check PATH, then common install locations)
+$GhExe = (Get-Command gh -ErrorAction SilentlyContinue)?.Source
+if (-not $GhExe) {
+    foreach ($candidate in @(
+        "$env:LOCALAPPDATA\Programs\GitHub CLI\gh.exe",
+        "C:\Program Files\GitHub CLI\gh.exe",
+        "$env:ProgramFiles\GitHub CLI\gh.exe"
+    )) {
+        if (Test-Path $candidate) { $GhExe = $candidate; break }
+    }
+}
+if (-not $GhExe) {
+    Write-Error ("gh CLI not found. Install from https://cli.github.com/ then run:`n" +
+        "  gh release create $Version --title 'StealthOps $Version' ``
+        --notes 'StealthOps $Version' ``
+        '${WinBin}#stealthops-windows-x64.exe' ``
+        '${LinuxBin}#stealthops-linux-x64'")
+    exit 1
+}
+
 # ── Build Windows ────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== Building Windows EXE ===" -ForegroundColor Cyan
@@ -57,7 +77,7 @@ $ReleaseNotes = if ($Notes) { $Notes } else {
     "StealthOps $Version`n`nPrivacy-hardened OSINT/reconnaissance utility.`n`n**Downloads**`n- ``stealthops.exe`` — Windows x64`n- ``stealthops`` — Linux x64 (glibc)"
 }
 
-gh release create $Version `
+& $GhExe release create $Version `
     --title "StealthOps $Version" `
     --notes $ReleaseNotes `
     "$WinBin#stealthops-windows-x64.exe" `
@@ -65,4 +85,4 @@ gh release create $Version `
 
 Write-Host ""
 Write-Host "Release $Version published." -ForegroundColor Green
-gh release view $Version --web
+& $GhExe release view $Version --web
