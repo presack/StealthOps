@@ -180,6 +180,10 @@ class EnrichmentManager:
                     break
         return out
 
+    def reload_keys(self) -> None:
+        """Re-read keys from os.environ without resetting usage counters."""
+        self._keys = self._load_keys()
+
     def usage_snapshot(self) -> dict[str, dict[str, int]]:
         with self._usage_lock:
             return {name: dict(counters) for name, counters in self._usage.items()}
@@ -203,18 +207,47 @@ class EnrichmentManager:
             }
         return status
 
-    def format_provider_status_lines(self) -> list[str]:
-        lines = ["Enrichment Providers:"]
+    def format_provider_status_lines(self, use_color: bool = True) -> list[str]:
+        _TARGET_LABEL: dict[tuple[str, ...], str] = {
+            ("ip", "domain", "url"): "IP · Domain · URL",
+            ("ip", "asn"):           "IP · ASN",
+            ("ip",):                 "IP",
+            ("domain", "url"):       "Domain · URL",
+            ("asn",):                "ASN",
+        }
+
+        def _c(text: str, code: str) -> str:
+            return f"\033[{code}m{text}\033[0m" if use_color else text
+
+        C_NAME, C_TARGETS = 18, 20
+        hdr = (
+            f"  {_c('Provider'.ljust(C_NAME), '1;97')}"
+            f"  {_c('Targets'.ljust(C_TARGETS), '1;97')}"
+            f"  {_c('Status', '1;97')}"
+        )
+        sep = f"  {_c('─' * C_NAME, '90')}  {_c('─' * C_TARGETS, '90')}  {_c('─' * 11, '90')}"
+        lines = ["", hdr, sep]
+
         status_map = self.provider_status()
-        for name in sorted(PROVIDER_SPECS.keys()):
+        for name in PROVIDER_SPECS:
             item = status_map.get(name, {})
-            state = "available" if item.get("has_key") else "no-key"
-            adapter = "ready" if item.get("adapter_ready") else "planned"
-            usage = item.get("usage", {})
-            lines.append(
-                f"- {item.get('display_name', name)} ({name}): {state}, adapter={adapter}, "
-                f"attempts={usage.get('attempts', 0)}, success={usage.get('success', 0)}, errors={usage.get('errors', 0)}"
+            has_key = item.get("has_key", False)
+            display = item.get("display_name", name)
+            target_label = _TARGET_LABEL.get(
+                tuple(item.get("target_types", [])),
+                " · ".join(item.get("target_types", [])),
             )
+            name_col    = display[:C_NAME].ljust(C_NAME)
+            target_col  = target_label[:C_TARGETS].ljust(C_TARGETS)
+            if has_key:
+                status_str = "● available"
+                row = f"  {_c(name_col + '  ' + target_col + '  ' + status_str, '32')}"
+            else:
+                status_str = "○ no key"
+                row = f"  {_c(name_col + '  ' + target_col + '  ' + status_str, '90')}"
+            lines.append(row)
+
+        lines.append("")
         return lines
 
     def format_quota_lines(self) -> list[str]:

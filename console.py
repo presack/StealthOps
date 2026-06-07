@@ -196,7 +196,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             try:
                 from keystore import sync_into_environ as _ks_sync
                 _ks_sync()
-                enrichment_manager = EnrichmentManager()
+                enrichment_manager.reload_keys()
             except ImportError:
                 pass
 
@@ -347,9 +347,8 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             continue
 
         if cmd == "providers":
-            for line in enrichment_manager.format_provider_status_lines():
+            for line in enrichment_manager.format_provider_status_lines(use_color=use_color):
                 print(line)
-            print("")
             continue
 
         if cmd == "quota":
