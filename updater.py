@@ -16,7 +16,8 @@ from _version import __version__
 
 _REPO = "presack/StealthOps"
 _API_URL = f"https://api.github.com/repos/{_REPO}/releases/latest"
-_CHECK_INTERVAL = 86400  # 24 hours
+_CHECK_INTERVAL_CURRENT = 4 * 3600   # 4h when already up-to-date (catches new releases promptly)
+_CHECK_INTERVAL_UPDATE  = 86400      # 24h when an update is already cached (user's been notified)
 
 
 def _state_dir() -> Path:
@@ -75,7 +76,10 @@ def check_for_update_background() -> None:
     import atexit
 
     state = _read_state()
-    if time.time() - state.get("checked_at", 0) < _CHECK_INTERVAL:
+    latest_cached = state.get("latest_version", "")
+    has_pending = latest_cached and _version_tuple(latest_cached) > _version_tuple(__version__)
+    interval = _CHECK_INTERVAL_UPDATE if has_pending else _CHECK_INTERVAL_CURRENT
+    if time.time() - state.get("checked_at", 0) < interval:
         return
 
     # Stamp checked_at now so we don't re-fire on every CLI invocation if the
