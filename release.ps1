@@ -18,10 +18,10 @@ if ($Version -notmatch '^v\d+\.\d+\.\d+$') {
     exit 1
 }
 
-# Ensure working tree is clean
-$status = git status --porcelain
+# Ensure no uncommitted changes (untracked files are fine)
+$status = git status --porcelain | Where-Object { $_ -notmatch '^\?\?' }
 if ($status) {
-    Write-Error "Working tree is not clean. Commit or stash changes first.`n$status"
+    Write-Error "Working tree has uncommitted changes. Commit or stash first.`n$status"
     exit 1
 }
 
