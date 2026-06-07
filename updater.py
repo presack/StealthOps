@@ -65,9 +65,22 @@ def _fetch_latest() -> dict | None:
 
 
 def check_for_update_background() -> None:
-    """Fire a daemon thread to refresh cached update state if stale (>24h)."""
-    if time.time() - _read_state().get("checked_at", 0) < _CHECK_INTERVAL:
+    """Fire a daemon thread to refresh cached update state if stale (>24h).
+
+    Writes checked_at immediately so the 24h throttle holds even if the
+    thread is killed mid-flight (e.g. short-lived CLI runs on Linux).
+    Registers an atexit join so short-lived processes wait up to 4s for the
+    thread to complete and persist the version info.
+    """
+    import atexit
+
+    state = _read_state()
+    if time.time() - state.get("checked_at", 0) < _CHECK_INTERVAL:
         return
+
+    # Stamp checked_at now so we don't re-fire on every CLI invocation if the
+    # thread gets killed before it can write the state itself.
+    _write_state({**state, "checked_at": time.time()})
 
     def _worker() -> None:
         data = _fetch_latest()
@@ -81,7 +94,11 @@ def check_for_update_background() -> None:
             "current_version": __version__,
         })
 
-    threading.Thread(target=_worker, daemon=True).start()
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    # For short-lived CLI runs the process exits before the thread finishes.
+    # Wait up to 4s so the state file gets written and the notice shows next run.
+    atexit.register(lambda: t.join(timeout=4))
 
 
 def get_update_notice(use_color: bool = True) -> str | None:
