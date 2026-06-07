@@ -94,8 +94,25 @@ Write-Host "=== Creating release $Version ===" -ForegroundColor Cyan
 git tag $Version
 git push origin $Version
 
+$InstallLine = "irm https://github.com/presack/StealthOps/releases/latest/download/install.ps1 | iex"
 $ReleaseNotes = if ($Notes) { $Notes } else {
-    "StealthOps $Version`n`nPrivacy-hardened OSINT/reconnaissance utility.`n`n**Downloads**`n- ``stealthops-windows-x64.exe`` — Windows x64`n- ``stealthops-linux-x64`` — Linux x64 (glibc)`n`n**Install (Windows)**`n````powershell`nirm https://github.com/presack/StealthOps/releases/latest/download/install.ps1 | iex`n```"
+@"
+StealthOps $Version
+
+Privacy-hardened OSINT/reconnaissance utility.
+
+**Install (Windows — no admin required)**
+
+Open PowerShell and run:
+
+``````powershell
+$InstallLine
+``````
+
+**Downloads**
+- ``stealthops-windows-x64.exe`` — Windows x64
+- ``stealthops-linux-x64`` — Linux x64 (glibc)
+"@
 }
 
 & $GhExe release create $Version `
