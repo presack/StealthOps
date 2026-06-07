@@ -8,3 +8,5 @@ pysocks
 python-multipart
 colorama
 fpdf2
+bcrypt
+cryptography

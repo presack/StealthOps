@@ -139,8 +139,12 @@ def selection_to_csv(values: list[str]) -> str:
 
 
 class EnrichmentManager:
-    def __init__(self) -> None:
+    def __init__(self, key_overrides: dict[str, str] | None = None) -> None:
         self._keys = self._load_keys()
+        if key_overrides:
+            for provider, raw_key in key_overrides.items():
+                if provider in PROVIDER_SPECS and str(raw_key).strip():
+                    self._keys[provider] = self._split_env_values(raw_key)
         self._usage_lock = threading.Lock()
         self._usage: dict[str, dict[str, int]] = {
             name: {"attempts": 0, "success": 0, "errors": 0}

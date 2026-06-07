@@ -21,6 +21,9 @@ from formatter import (
     interactive_stdio,
     truncate_text,
 )
+import cache as _cache_module
+import time as _time_module
+
 from runner import execute_enrichment_only, execute_query
 from tor_engine import TorEngine
 
@@ -199,6 +202,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("  !<target>              forced shorthand query")
             print("  last                   show last successful target")
             print("  last clear             clear last successful target")
+            print("  reload                 re-run last query bypassing 6h cache")
             print("  full                   re-display last result with all truncation removed")
             print("  providers              list enrichment provider/key status")
             print("  quota                  show enrichment usage counters")
@@ -320,17 +324,39 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 print("")
                 continue
             target = parts[1]
+            _cache_hit = _cache_module.get(target, "full")
+            if _cache_hit is not None:
+                _cached_data, _cached_ts = _cache_hit
+                if emit_json:
+                    import json as _json
+                    print(_json.dumps(_cached_data, indent=2))
+                else:
+                    from formatter import format_cli_report, colorize_report
+                    print(colorize_report(format_cli_report(_cached_data), use_color))
+                _age_m = int((_time_module.time() - _cached_ts) / 60)
+                _age_s = f"{_age_m}m" if _age_m < 60 else f"{_age_m // 60}h {_age_m % 60}m"
+                print(f"[cached {_age_s} ago — type 'reload' to refresh]")
+                last_target = target
+                session_history.pop(target, None)
+                session_history[target] = _cached_data
+                if len(session_history) > 10:
+                    del session_history[next(iter(session_history))]
+                print("")
+                continue
             rc, _result = execute_query(
                 query_engine, target, emit_json,
                 use_color=use_color, include_headers=include_headers,
                 enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
             )
-            if rc == 0:
+            if rc == 0 and _result:
                 last_target = target
+                _cache_module.put(target, "full", _result)
                 session_history.pop(target, None)
-                session_history[target] = _result or {}
+                session_history[target] = _result
                 if len(session_history) > 10:
                     del session_history[next(iter(session_history))]
+            elif rc == 0:
+                last_target = target
             print("")
             continue
 
@@ -437,6 +463,27 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("")
             continue
 
+        if cmd == "reload":
+            if not last_target:
+                print("no previous query — run a query first")
+                print("")
+                continue
+            target = last_target
+            rc, _result = execute_query(
+                query_engine, target, emit_json,
+                use_color=use_color, include_headers=include_headers,
+                enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
+            )
+            if rc == 0 and _result:
+                last_target = target
+                _cache_module.put(target, "full", _result)
+                session_history.pop(target, None)
+                session_history[target] = _result
+                if len(session_history) > 10:
+                    del session_history[next(iter(session_history))]
+            print("")
+            continue
+
         if cmd == "report":
             out_path_arg: str | None = None
             target_arg: str | None = None
@@ -516,17 +563,39 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
 
         shorthand_target = raw[1:].strip() if raw.startswith("!") else raw
         if shorthand_target:
+            _cache_hit = _cache_module.get(shorthand_target, "full")
+            if _cache_hit is not None:
+                _cached_data, _cached_ts = _cache_hit
+                if emit_json:
+                    import json as _json
+                    print(_json.dumps(_cached_data, indent=2))
+                else:
+                    from formatter import format_cli_report, colorize_report
+                    print(colorize_report(format_cli_report(_cached_data), use_color))
+                _age_m = int((_time_module.time() - _cached_ts) / 60)
+                _age_s = f"{_age_m}m" if _age_m < 60 else f"{_age_m // 60}h {_age_m % 60}m"
+                print(f"[cached {_age_s} ago — type 'reload' to refresh]")
+                last_target = shorthand_target
+                session_history.pop(shorthand_target, None)
+                session_history[shorthand_target] = _cached_data
+                if len(session_history) > 10:
+                    del session_history[next(iter(session_history))]
+                print("")
+                continue
             rc, _result = execute_query(
                 query_engine, shorthand_target, emit_json,
                 use_color=use_color, include_headers=include_headers,
                 enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
             )
-            if rc == 0:
+            if rc == 0 and _result:
                 last_target = shorthand_target
+                _cache_module.put(shorthand_target, "full", _result)
                 session_history.pop(shorthand_target, None)
-                session_history[shorthand_target] = _result or {}
+                session_history[shorthand_target] = _result
                 if len(session_history) > 10:
                     del session_history[next(iter(session_history))]
+            elif rc == 0:
+                last_target = shorthand_target
             print("")
             continue
 

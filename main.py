@@ -36,6 +36,17 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
                         help="Save a PDF report to PATH after the query (default: ~/Downloads)")
     parser.add_argument("--host", default="127.0.0.1", help="Web server bind host")
     parser.add_argument("--port", type=int, default=5000, help="Web server bind port")
+    # Server mode admin commands
+    parser.add_argument("--create-user", metavar="USERNAME", help="SERVER_MODE: create a user account (prompts for password)")
+    parser.add_argument("--delete-user", metavar="USERNAME", help="SERVER_MODE: delete a user account")
+    parser.add_argument("--list-users", action="store_true", help="SERVER_MODE: list all user accounts")
+    parser.add_argument("--reset-password", metavar="USERNAME", help="SERVER_MODE: reset a user's password (prompts for new password)")
+    parser.add_argument("--set-key", nargs=2, metavar=("PROVIDER", "KEY"), help="SERVER_MODE: set a provider API key (use with --username or --all-users)")
+    parser.add_argument("--delete-key", nargs=2, metavar=("USERNAME", "PROVIDER"), help="SERVER_MODE: remove a user's provider key")
+    parser.add_argument("--copy-keys", nargs=2, metavar=("FROM_USER", "TO_USER"), help="SERVER_MODE: copy all keys from one user to another")
+    parser.add_argument("--username", metavar="USERNAME", help="Target username for --set-key")
+    parser.add_argument("--all-users", action="store_true", help="Apply --set-key to all existing users")
+    parser.add_argument("--generate-fernet-key", action="store_true", help="Generate and print a new FERNET_KEY value")
     return parser, parser.parse_args()
 
 
@@ -135,6 +146,90 @@ def main() -> int:
         for line in manager.format_provider_status_lines():
             print(line)
         return 0
+
+    if args.generate_fernet_key:
+        from cryptography.fernet import Fernet
+        print(Fernet.generate_key().decode())
+        return 0
+
+    _admin_cmds = any([
+        args.create_user, args.delete_user, args.list_users, args.reset_password,
+        args.set_key, args.delete_key, args.copy_keys,
+    ])
+    if _admin_cmds:
+        import auth as _auth
+        import getpass
+
+        if args.list_users:
+            users = _auth.list_users()
+            if users:
+                for u in users:
+                    print(u)
+            else:
+                print("(no users)")
+            return 0
+
+        if args.create_user:
+            password = getpass.getpass(f"Password for '{args.create_user}': ")
+            confirm = getpass.getpass("Confirm password: ")
+            if password != confirm:
+                print("error: passwords do not match")
+                return 1
+            if _auth.create_user(args.create_user, password):
+                print(f"user '{args.create_user}' created")
+            else:
+                print(f"error: user '{args.create_user}' already exists")
+                return 1
+            return 0
+
+        if args.delete_user:
+            if _auth.delete_user(args.delete_user):
+                print(f"user '{args.delete_user}' deleted")
+            else:
+                print(f"error: user '{args.delete_user}' not found")
+                return 1
+            return 0
+
+        if args.reset_password:
+            new_pass = getpass.getpass(f"New password for '{args.reset_password}': ")
+            confirm = getpass.getpass("Confirm password: ")
+            if new_pass != confirm:
+                print("error: passwords do not match")
+                return 1
+            if _auth.admin_reset_password(args.reset_password, new_pass):
+                print(f"password reset for '{args.reset_password}'")
+            else:
+                print(f"error: user '{args.reset_password}' not found")
+                return 1
+            return 0
+
+        if args.set_key:
+            provider, key = args.set_key
+            if args.all_users:
+                count = _auth.set_key_all_users(provider, key)
+                print(f"set {provider} key for {count} user(s)")
+            elif args.username:
+                if _auth.set_key(args.username, provider, key):
+                    print(f"set {provider} key for '{args.username}'")
+                else:
+                    print(f"error: user '{args.username}' not found")
+                    return 1
+            else:
+                print("error: --set-key requires --username <user> or --all-users")
+                return 1
+            return 0
+
+        if args.delete_key:
+            username, provider = args.delete_key
+            _auth.delete_key(username, provider)
+            print(f"removed {provider} key for '{username}'")
+            return 0
+
+        if args.copy_keys:
+            from_user, to_user = args.copy_keys
+            count = _auth.copy_keys(from_user, to_user)
+            print(f"copied {count} key(s) from '{from_user}' to '{to_user}'")
+            return 0
 
     if args.install_tor and not args.query and not args.target and not args.console and not args.web:
         tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))

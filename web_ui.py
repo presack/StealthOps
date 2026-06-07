@@ -71,11 +71,16 @@ def build_app(
 ) -> FastAPI:
     app = FastAPI(title="StealthOps")
 
-    cloud_mode = os.environ.get("CLOUD_MODE", "").strip().lower() in {"1", "true", "yes"}
+    training_mode = os.environ.get("TRAINING_MODE", "").strip().lower() in {"1", "true", "yes"}
+    server_mode   = os.environ.get("SERVER_MODE",   "").strip().lower() in {"1", "true", "yes"}
 
-    if cloud_mode:
-        _cloud_user = os.environ.get("CLOUD_AUTH_USER", "")
-        _cloud_pass = os.environ.get("CLOUD_AUTH_PASS", "")
+    import cache as _cache_module
+    _cache_module.sweep()
+    CACHE_TTL = _cache_module._TTL_TRAINING if training_mode else _cache_module._TTL_DEFAULT
+
+    if training_mode:
+        _training_user = os.environ.get("TRAINING_AUTH_USER", "")
+        _training_pass = os.environ.get("TRAINING_AUTH_PASS", "")
 
         @app.middleware("http")
         async def _basic_auth(request: Request, call_next):
@@ -84,7 +89,7 @@ def build_app(
                 try:
                     decoded = base64.b64decode(auth[6:]).decode("utf-8", errors="replace")
                     u, _, p = decoded.partition(":")
-                    if secrets.compare_digest(u, _cloud_user) and secrets.compare_digest(p, _cloud_pass):
+                    if secrets.compare_digest(u, _training_user) and secrets.compare_digest(p, _training_pass):
                         return await call_next(request)
                 except Exception:
                     pass
@@ -96,10 +101,21 @@ def build_app(
                 headers={"WWW-Authenticate": 'Basic realm="StealthOps"'},
             )
 
-        import cache as _cache_module
-        _cache_module.sweep()
-    else:
-        _cache_module = None
+    _auth_module = None
+    if server_mode:
+        import auth as _auth_module
+
+        @app.middleware("http")
+        async def _session_auth(request: Request, call_next):
+            if request.url.path in {"/login", "/favicon.ico"}:
+                return await call_next(request)
+            token = request.cookies.get("so_session", "")
+            username = _auth_module.get_session_user(token) if token else None
+            if not username:
+                from fastapi.responses import RedirectResponse
+                return RedirectResponse("/login", status_code=302)
+            request.state.username = username
+            return await call_next(request)
 
     tor_engine = TorEngine(
         tor_update_mode=tor_update_mode,
@@ -112,8 +128,8 @@ def build_app(
     jobs: dict[str, dict] = {}
     request_hits: dict[str, list[float]] = {}
     RATE_LIMIT_WINDOW_SECONDS = 60.0
-    RATE_LIMIT_MAX_REQUESTS = int(os.environ.get("CLOUD_RATE_LIMIT", "60")) if cloud_mode else 20
-    MAX_ACTIVE_JOBS = 20 if cloud_mode else 8
+    RATE_LIMIT_MAX_REQUESTS = int(os.environ.get("TRAINING_RATE_LIMIT", "60")) if training_mode else 20
+    MAX_ACTIVE_JOBS = 20 if training_mode else 8
 
     def client_ip(request: Request) -> str:
         if request.client and request.client.host:
@@ -193,7 +209,7 @@ def build_app(
             + "</pre>"
         )
 
-    def render_results(results: dict, show_json: bool, job_id: str = "") -> str:
+    def render_results(results: dict, show_json: bool, job_id: str = "", cached_at: int = 0) -> str:
         address_data = results.get("address", {})
         dns_data = results.get("dns", {})
         mx_data = results.get("mx", {})
@@ -656,7 +672,26 @@ def build_app(
             if job_id else ""
         )
 
-        return download_bar + f"""
+        if cached_at:
+            age_secs = int(time.time() - cached_at)
+            if age_secs < 60:
+                age_str = "less than a minute"
+            elif age_secs < 3600:
+                m = age_secs // 60
+                age_str = f"{m} minute{'s' if m != 1 else ''}"
+            else:
+                h = age_secs // 3600
+                age_str = f"{h} hour{'s' if h != 1 else ''}"
+            cache_banner = (
+                "<div class='text-xs text-slate-400 mt-3 mb-1'>"
+                f"Cached result from {age_str} ago — "
+                "<button type='button' onclick='refreshQuery()' "
+                "class='text-cyan-400 underline hover:text-cyan-300'>Refresh</button></div>"
+            )
+        else:
+            cache_banner = ""
+
+        return cache_banner + download_bar + f"""
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-2'>
   <h3 class='font-semibold mb-2'>Address lookup</h3>
   <div class='min-h-[4rem]'>
@@ -729,6 +764,8 @@ def build_app(
         notice: str = "",
         update_source: str = "",
         enrich_selection: str = "off",
+        username: str = "",
+        enrichment_mgr: "EnrichmentManager | None" = None,
     ) -> str:
         stealth_ready = get_tor_ok()
         shield_class = "bg-cyan-600" if route_mode == "public" else ("bg-emerald-600" if stealth_ready else "bg-red-600")
@@ -744,7 +781,7 @@ def build_app(
             "<p class='text-slate-300 text-xs mt-2'>Runtime: "
             + html.escape(str(tor_engine.last_update_message))
             + "</p>"
-            if tor_engine.last_update_message and not cloud_mode
+            if tor_engine.last_update_message and not training_mode and not server_mode
             else ""
         )
         notice_html = f"<p class='text-cyan-300 mt-3'>{html.escape(str(notice))}</p>" if notice else ""
@@ -773,7 +810,7 @@ def build_app(
       </form>
     </section>
 """
-        if cloud_mode:
+        if training_mode or server_mode:
             run_button_label = "Run Query"
             run_button_class = "bg-cyan-600 hover:bg-cyan-500"
         else:
@@ -782,8 +819,8 @@ def build_app(
         parsed_selection = parse_enrichment_selection(enrich_selection)
         all_enabled_selected = parsed_selection == ["all-enabled"]
         selected_enrich = set(parsed_selection)
-        providers = enrichment_manager.provider_status()
-        if cloud_mode:
+        providers = (enrichment_mgr or enrichment_manager).provider_status()
+        if training_mode:
             enabled_names = sorted(
                 name for name, item in providers.items()
                 if item.get("has_key") and item.get("adapter_ready")
@@ -828,7 +865,7 @@ def build_app(
                 + "</div>"
             )
 
-        if cloud_mode:
+        if training_mode or server_mode:
             _hdr_badge = "<div class='px-4 py-2 rounded-full bg-cyan-600 text-white text-sm font-semibold'>Public Mode</div>"
             _hdr_toggle = ""
             _form_route = ""
@@ -863,6 +900,7 @@ def build_app(
       <div class='flex items-center gap-3'>
         {_hdr_badge}
         {_hdr_toggle}
+        {f"<div class='flex items-center gap-2 text-sm'><span class='text-slate-400'>{html.escape(username)}</span><a href='/account' class='text-slate-300 hover:text-white underline'>Account</a><form method='post' action='/logout' style='display:inline'><button class='text-slate-300 hover:text-white underline'>Sign out</button></form></div>" if username else ""}
       </div>
     </header>
 
@@ -954,8 +992,20 @@ def build_app(
         }}
       }}
 
+      function refreshQuery() {{
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'force_refresh'; inp.value = '1';
+        inp.id = '_force_refresh_flag';
+        var old = form.querySelector('#_force_refresh_flag');
+        if (old) form.removeChild(old);
+        form.appendChild(inp);
+        form.dispatchEvent(new Event('submit', {{bubbles: true, cancelable: true}}));
+      }}
+
       form.addEventListener('submit', async function(ev) {{
         ev.preventDefault();
+        var frFlag = form.querySelector('#_force_refresh_flag');
+        if (frFlag) form.removeChild(frFlag);
         const selectedEnrich = Array.from(form.querySelectorAll('input[name="enrich"]:checked')).map(function(i) {{ return i.value; }});
         const pendingEnrichment = selectedEnrich.length
           ? "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Enrichment</h3><div class='rounded-lg border border-cyan-700/60 bg-cyan-900/20 p-3'><p class='text-cyan-200 text-sm'>Gathering enrichment data for "
@@ -994,18 +1044,23 @@ def build_app(
 """
 
     @app.get("/", response_class=HTMLResponse)
-    async def home() -> HTMLResponse:
+    async def home(request: Request) -> HTMLResponse:
+        username = getattr(request.state, "username", "") if server_mode else ""
+        user_keys = _auth_module.get_keys(username) if (server_mode and username) else {}
+        user_em = EnrichmentManager(key_overrides=user_keys) if user_keys else enrichment_manager
         return HTMLResponse(
             render_page(
                 route_mode=query_engine.config.route_mode,
                 update_source=tor_engine.preview_update_source(),
                 enrich_selection="off",
+                username=username,
+                enrichment_mgr=user_em,
             )
         )
 
     @app.post("/mode", response_class=HTMLResponse)
     async def set_mode(route_mode: str = Form("public")) -> HTMLResponse:
-        if cloud_mode:
+        if training_mode or server_mode:
             return HTMLResponse(render_page(route_mode="public"))
         selected = "stealth" if route_mode == "stealth" else "public"
         query_engine.config.route_mode = selected
@@ -1088,7 +1143,7 @@ def build_app(
         form = await request.form()
         enrich_all = str(form.get("enrich_all", "")).strip().lower() in {"1", "true", "on", "yes"}
         enrich_values = [str(v) for v in form.getlist("enrich")]
-        enrich_selection = "all-enabled" if (cloud_mode or enrich_all) else selection_to_csv(enrich_values)
+        enrich_selection = "all-enabled" if (training_mode or enrich_all) else selection_to_csv(enrich_values)
         ip = client_ip(request)
         rate_limit_error = enforce_rate_limit(ip)
         if rate_limit_error:
@@ -1108,7 +1163,27 @@ def build_app(
             )
         selected_mode = "stealth" if route_mode == "stealth" else "public"
         target_value = target.strip()
+        force_refresh = str(form.get("force_refresh", "")).strip() == "1"
+        session_username = getattr(request.state, "username", "") if server_mode else ""
         job_id = uuid.uuid4().hex
+
+        # Cache check for personal / server mode (skip if force_refresh or training mode)
+        if not training_mode and not force_refresh:
+            hit = _cache_module.get(target_value, "full", ttl=CACHE_TTL)
+            if hit is not None:
+                cached_payload, cached_at_ts = hit
+                with jobs_lock:
+                    jobs[job_id] = {
+                        "done": True,
+                        "error": "",
+                        "results": cached_payload,
+                        "target": target_value,
+                        "route_mode": selected_mode,
+                        "enrich_selection": enrich_selection,
+                        "cached_at": cached_at_ts,
+                        "updated_at": time.time(),
+                    }
+                return JSONResponse({"job_id": job_id})
 
         with jobs_lock:
             jobs[job_id] = {
@@ -1118,6 +1193,7 @@ def build_app(
                 "target": target_value,
                 "route_mode": selected_mode,
                 "enrich_selection": enrich_selection,
+                "cached_at": 0,
                 "updated_at": time.time(),
             }
 
@@ -1132,6 +1208,13 @@ def build_app(
             if selected_mode == "stealth":
                 tor_engine.ensure_tor()
 
+            # Per-user enrichment manager for SERVER_MODE
+            if server_mode and session_username:
+                user_keys = _auth_module.get_keys(session_username)
+                local_enrich = EnrichmentManager(key_overrides=user_keys) if user_keys else enrichment_manager
+            else:
+                local_enrich = enrichment_manager
+
             def on_update(snapshot: dict) -> None:
                 with jobs_lock:
                     if job_id not in jobs:
@@ -1140,21 +1223,21 @@ def build_app(
                     jobs[job_id]["updated_at"] = time.time()
 
             try:
-                if cloud_mode and _cache_module is not None:
-                    cached_core = _cache_module.get(target_value, "core")
+                if training_mode:
+                    cached_core = _cache_module.get(target_value, "core", ttl=CACHE_TTL)
                     if cached_core is not None:
-                        final = dict(cached_core)
+                        final = dict(cached_core[0])
                     else:
                         final = local_engine.run_all_staged(target_value, on_update=on_update)
                         _cache_module.put(target_value, "core", {k: v for k, v in final.items() if k != "enrichment"})
-                    resolved = enrichment_manager.resolve_requested("all-enabled")
+                    resolved = local_enrich.resolve_requested("all-enabled")
                     providers_out: dict = {}
                     for pname in resolved:
-                        cached_payload = _cache_module.get(target_value, pname)
+                        cached_payload = _cache_module.get(target_value, pname, ttl=CACHE_TTL)
                         if cached_payload is not None:
-                            providers_out[pname] = cached_payload
+                            providers_out[pname] = cached_payload[0]
                         else:
-                            payload = enrichment_manager.run_one(target_value, pname)
+                            payload = local_enrich.run_one(target_value, pname)
                             _cache_module.put(target_value, pname, payload)
                             providers_out[pname] = payload
                     final["enrichment"] = {
@@ -1164,15 +1247,23 @@ def build_app(
                         "providers": providers_out,
                         "skipped": [],
                     }
+                    with jobs_lock:
+                        if job_id in jobs:
+                            jobs[job_id]["results"] = final
+                            jobs[job_id]["done"] = True
+                            jobs[job_id]["updated_at"] = time.time()
                 else:
+                    # Personal / server mode — check full-result cache first (done before worker starts),
+                    # but store result in cache on completion.
                     final = local_engine.run_all_staged(target_value, on_update=on_update)
                     if parse_enrichment_selection(enrich_selection):
-                        final["enrichment"] = enrichment_manager.run(target_value, enrich_selection)
-                with jobs_lock:
-                    if job_id in jobs:
-                        jobs[job_id]["results"] = final
-                        jobs[job_id]["done"] = True
-                        jobs[job_id]["updated_at"] = time.time()
+                        final["enrichment"] = local_enrich.run(target_value, enrich_selection)
+                    _cache_module.put(target_value, "full", final)
+                    with jobs_lock:
+                        if job_id in jobs:
+                            jobs[job_id]["results"] = final
+                            jobs[job_id]["done"] = True
+                            jobs[job_id]["updated_at"] = time.time()
             except Exception as exc:
                 with jobs_lock:
                     if job_id in jobs:
@@ -1193,12 +1284,14 @@ def build_app(
             done = bool(job.get("done"))
             error = str(job.get("error") or "")
             enrich_selection = str(job.get("enrich_selection") or "off")
+            job_cached_at = int(job.get("cached_at") or 0)
 
         html_fragment = ""
         if error:
             html_fragment = f"<p class='text-red-400'>{html.escape(error)}</p>"
         elif results:
-            html_fragment = render_results(results, False, job_id=job_id if done else "")
+            cached_at = job_cached_at
+            html_fragment = render_results(results, False, job_id=job_id if done else "", cached_at=cached_at if done else 0)
             enrichment_ready = bool(
                 isinstance(results, dict)
                 and isinstance(results.get("enrichment"), dict)
@@ -1263,5 +1356,136 @@ def build_app(
                 update_source=tor_engine.preview_update_source(),
             )
         )
+
+    if server_mode:
+        def _render_login(error: str = "") -> str:
+            err_html = f"<p class='text-red-400 mt-3 text-sm'>{html.escape(error)}</p>" if error else ""
+            return f"""<!doctype html><html>
+<head><meta charset='utf-8'/><meta name='viewport' content='width=device-width,initial-scale=1'/>
+<title>StealthOps — Sign In</title><script src='{TAILWIND_CDN}'></script></head>
+<body class='bg-slate-950 text-slate-100 min-h-screen flex items-center justify-center'>
+<div class='w-full max-w-sm p-8 bg-slate-800/70 rounded-xl shadow-xl'>
+  <h1 class='text-2xl font-bold mb-6'>StealthOps</h1>
+  <form method='post' action='/login' class='space-y-4'>
+    <div><label class='block text-sm mb-1'>Username</label>
+    <input name='username' autocomplete='username' required
+      class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2'/></div>
+    <div><label class='block text-sm mb-1'>Password</label>
+    <input name='password' type='password' autocomplete='current-password' required
+      class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2'/></div>
+    <button class='w-full px-4 py-2 rounded-lg font-semibold text-white bg-cyan-600 hover:bg-cyan-500'>Sign in</button>
+  </form>
+  {err_html}
+</div></body></html>"""
+
+        @app.get("/login", response_class=HTMLResponse)
+        async def login_page() -> HTMLResponse:
+            return HTMLResponse(_render_login())
+
+        @app.post("/login", response_class=HTMLResponse)
+        async def login_submit(
+            username: str = Form(""),
+            password: str = Form(""),
+        ) -> HTMLResponse:
+            if _auth_module.verify_user(username, password):
+                token = _auth_module.create_session(username.strip().lower())
+                from fastapi.responses import RedirectResponse
+                resp = RedirectResponse("/", status_code=302)
+                resp.set_cookie("so_session", token, httponly=True, samesite="strict", max_age=7 * 86400)
+                return resp
+            return HTMLResponse(_render_login("Invalid username or password."), status_code=401)
+
+        @app.post("/logout")
+        async def logout(request: Request) -> HTMLResponse:
+            token = request.cookies.get("so_session", "")
+            if token:
+                _auth_module.delete_session(token)
+            from fastapi.responses import RedirectResponse
+            resp = RedirectResponse("/login", status_code=302)
+            resp.delete_cookie("so_session")
+            return resp
+
+        def _render_account(request: Request, error: str = "", notice: str = "") -> str:
+            username = getattr(request.state, "username", "")
+            user_keys = _auth_module.get_keys(username)
+            from enrichment import PROVIDER_SPECS as _PS
+            key_rows = ""
+            for pname in sorted(_PS.keys()):
+                spec = _PS[pname]
+                if not spec.env_vars:
+                    continue
+                current = html.escape(user_keys.get(pname, ""))
+                placeholder = html.escape(spec.env_vars[0])
+                key_rows += (
+                    f"<tr><td class='py-2 pr-4 text-slate-300 align-top text-sm whitespace-nowrap'>{html.escape(spec.display_name)}</td>"
+                    f"<td class='py-2'><input name='key_{html.escape(pname)}' value='{current}' placeholder='{placeholder}' "
+                    f"class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-sm font-mono'/></td></tr>"
+                )
+            err_html = f"<p class='text-red-400 text-sm mt-2'>{html.escape(error)}</p>" if error else ""
+            notice_html = f"<p class='text-cyan-300 text-sm mt-2'>{html.escape(notice)}</p>" if notice else ""
+            return f"""<!doctype html><html>
+<head><meta charset='utf-8'/><meta name='viewport' content='width=device-width,initial-scale=1'/>
+<title>StealthOps — Account</title><script src='{TAILWIND_CDN}'></script></head>
+<body class='bg-slate-950 text-slate-100 min-h-screen'>
+<main class='max-w-2xl mx-auto p-6'>
+  <div class='flex items-center justify-between mb-6'>
+    <h1 class='text-2xl font-bold'>Account — {html.escape(username)}</h1>
+    <a href='/' class='text-sm text-slate-400 hover:text-white underline'>← Back</a>
+  </div>
+  <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mb-4'>
+    <h2 class='font-semibold mb-3'>Change Password</h2>
+    <form method='post' action='/account/password' class='space-y-3'>
+      <input name='old_password' type='password' placeholder='Current password'
+        class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm'/>
+      <input name='new_password' type='password' placeholder='New password'
+        class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm'/>
+      <input name='confirm_password' type='password' placeholder='Confirm new password'
+        class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm'/>
+      <button class='px-4 py-2 rounded-lg font-semibold text-white bg-cyan-600 hover:bg-cyan-500 text-sm'>Update Password</button>
+    </form>
+  </section>
+  <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl'>
+    <h2 class='font-semibold mb-1'>API Keys</h2>
+    <p class='text-slate-400 text-xs mb-3'>Keys are encrypted at rest. Leave blank to remove.</p>
+    <form method='post' action='/account/keys'>
+      <table class='w-full'><tbody>{key_rows}</tbody></table>
+      <button class='mt-4 px-4 py-2 rounded-lg font-semibold text-white bg-cyan-600 hover:bg-cyan-500 text-sm'>Save Keys</button>
+    </form>
+  </section>
+  {err_html}{notice_html}
+</main></body></html>"""
+
+        @app.get("/account", response_class=HTMLResponse)
+        async def account_page(request: Request) -> HTMLResponse:
+            return HTMLResponse(_render_account(request))
+
+        @app.post("/account/password", response_class=HTMLResponse)
+        async def account_change_password(
+            request: Request,
+            old_password: str = Form(""),
+            new_password: str = Form(""),
+            confirm_password: str = Form(""),
+        ) -> HTMLResponse:
+            username = getattr(request.state, "username", "")
+            if new_password != confirm_password:
+                return HTMLResponse(_render_account(request, error="New passwords do not match."))
+            if not new_password:
+                return HTMLResponse(_render_account(request, error="New password cannot be empty."))
+            if _auth_module.change_password(username, old_password, new_password):
+                return HTMLResponse(_render_account(request, notice="Password updated successfully."))
+            return HTMLResponse(_render_account(request, error="Current password is incorrect."))
+
+        @app.post("/account/keys", response_class=HTMLResponse)
+        async def account_save_keys(request: Request) -> HTMLResponse:
+            username = getattr(request.state, "username", "")
+            form_data = await request.form()
+            from enrichment import PROVIDER_SPECS as _PS
+            for pname in _PS.keys():
+                value = str(form_data.get(f"key_{pname}", "")).strip()
+                if value:
+                    _auth_module.set_key(username, pname, value)
+                else:
+                    _auth_module.delete_key(username, pname)
+            return HTMLResponse(_render_account(request, notice="API keys saved."))
 
     return app

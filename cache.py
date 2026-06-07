@@ -1,4 +1,4 @@
-"""SQLite-backed result cache for CLOUD_MODE deployments."""
+"""SQLite-backed result cache for StealthOps (all modes)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,9 @@ import os
 import sqlite3
 import time
 
-_TTL = 86400      # 24 hours — live entries
-_SWEEP_AGE = 172800  # 48 hours — sweep threshold
+_TTL_TRAINING = 86400    # 24 h — training mode
+_TTL_DEFAULT  = 21600    # 6 h  — personal and server modes
+_SWEEP_AGE    = 172800   # 48 h — sweep threshold
 
 
 def _db_path() -> str:
@@ -37,8 +38,8 @@ def _cache_key(target: str, scope: str) -> str:
     return hashlib.sha256(f"{target.lower()}|{scope}".encode()).hexdigest()
 
 
-def get(target: str, scope: str) -> dict | None:
-    """Return cached payload for (target, scope), or None on miss/expiry."""
+def get(target: str, scope: str, ttl: int = _TTL_DEFAULT) -> tuple[dict, int] | None:
+    """Return (payload, fetched_at) for (target, scope), or None on miss/expiry."""
     key = _cache_key(target, scope)
     try:
         conn = _open()
@@ -51,9 +52,9 @@ def get(target: str, scope: str) -> dict | None:
         if row is None:
             return None
         payload_json, fetched_at = row
-        if time.time() - fetched_at > _TTL:
+        if time.time() - fetched_at > ttl:
             return None
-        return json.loads(payload_json)
+        return json.loads(payload_json), int(fetched_at)
     except Exception:
         return None
 
