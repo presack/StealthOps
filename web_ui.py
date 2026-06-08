@@ -1284,7 +1284,7 @@ def build_app(
                 else:
                     # Personal / server mode.
                     # Core: use per-target cache so repeat enrichment runs don't re-fetch DNS/WHOIS.
-                    cached_core = _cache_module.get(target_value, "core", ttl=CACHE_TTL)
+                    cached_core = None if force_refresh else _cache_module.get(target_value, "core", ttl=CACHE_TTL)
                     if cached_core is not None:
                         final = dict(cached_core[0])
                         on_update(final)
@@ -1296,7 +1296,7 @@ def build_app(
                         _cache_module.put(target_value, "core", {k: v for k, v in final.items() if k != "enrichment"})
 
                     # Enrichment: per-provider cache so each provider is fetched at most once per TTL.
-                    # force_refresh bypasses per-provider cache for selected providers only.
+                    # force_refresh bypasses all caches and only shows providers selected this run.
                     providers_out: dict = {}
                     if parse_enrichment_selection(enrich_selection):
                         resolved = local_enrich.resolve_requested(enrich_selection)
@@ -1310,8 +1310,8 @@ def build_app(
                             _cache_module.put(target_value, pname, payload)
                             providers_out[pname] = payload
 
-                    # Merge any previously cached providers not in this run so the panel accumulates.
-                    existing_full = _cache_module.get(target_value, "full", ttl=CACHE_TTL)
+                    # Merge previously cached providers from other runs (skipped on force_refresh).
+                    existing_full = None if force_refresh else _cache_module.get(target_value, "full", ttl=CACHE_TTL)
                     if existing_full:
                         for pname, pdata in existing_full[0].get("enrichment", {}).get("providers", {}).items():
                             if pname not in providers_out:
