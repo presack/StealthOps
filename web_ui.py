@@ -688,7 +688,7 @@ def build_app(
         cache_banner = (
             "<div class='text-xs text-slate-400 mt-3 mb-1'>"
             f"{age_label}"
-            "<button type='button' onclick='refreshQuery()' "
+            "<button id='refresh-btn' type='button' "
             "class='text-cyan-400 underline hover:text-cyan-300'>Refresh</button></div>"
         )
 
@@ -1052,7 +1052,9 @@ def build_app(
         pollJob(data.job_id);
       }}
 
-      window.refreshQuery = function() {{ runQuery(true); }};
+      panel.addEventListener('click', function(ev) {{
+        if (ev.target && ev.target.id === 'refresh-btn') runQuery(true);
+      }});
 
       form.addEventListener('submit', function(ev) {{
         ev.preventDefault();
