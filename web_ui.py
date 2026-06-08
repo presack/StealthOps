@@ -1195,22 +1195,27 @@ def build_app(
         job_id = uuid.uuid4().hex
 
         # Cache check for personal / server mode (skip if force_refresh or training mode)
+        # Only use the cache hit if it already contains enrichment data when enrichment is requested,
+        # otherwise fall through to the worker so enrichment actually runs.
         if not training_mode and not force_refresh:
             hit = _cache_module.get(target_value, "full", ttl=CACHE_TTL)
             if hit is not None:
                 cached_payload, cached_at_ts = hit
-                with jobs_lock:
-                    jobs[job_id] = {
-                        "done": True,
-                        "error": "",
-                        "results": cached_payload,
-                        "target": target_value,
-                        "route_mode": selected_mode,
-                        "enrich_selection": enrich_selection,
-                        "cached_at": cached_at_ts,
-                        "updated_at": time.time(),
-                    }
-                return JSONResponse({"job_id": job_id})
+                enrich_requested = bool(parse_enrichment_selection(enrich_selection))
+                cache_has_enrich = bool(cached_payload.get("enrichment", {}).get("providers"))
+                if not enrich_requested or cache_has_enrich:
+                    with jobs_lock:
+                        jobs[job_id] = {
+                            "done": True,
+                            "error": "",
+                            "results": cached_payload,
+                            "target": target_value,
+                            "route_mode": selected_mode,
+                            "enrich_selection": enrich_selection,
+                            "cached_at": cached_at_ts,
+                            "updated_at": time.time(),
+                        }
+                    return JSONResponse({"job_id": job_id})
 
         with jobs_lock:
             jobs[job_id] = {
