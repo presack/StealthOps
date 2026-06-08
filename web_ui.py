@@ -1031,8 +1031,6 @@ def build_app(
 
       form.addEventListener('submit', async function(ev) {{
         ev.preventDefault();
-        var frFlag = form.querySelector('#_force_refresh_flag');
-        if (frFlag) form.removeChild(frFlag);
         const selectedEnrich = Array.from(form.querySelectorAll('input[name="enrich"]:checked')).map(function(i) {{ return i.value; }});
         const pendingEnrichment = selectedEnrich.length
           ? "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Enrichment</h3><div class='rounded-lg border border-cyan-700/60 bg-cyan-900/20 p-3'><p class='text-cyan-200 text-sm'>Gathering enrichment data for "
@@ -1045,6 +1043,8 @@ def build_app(
           + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Network Whois record</h3><div class='min-h-[12rem] text-slate-400 text-sm'>Collecting...</div></section>"
           + pendingEnrichment;
         const body = new FormData(form);
+        var frFlag = form.querySelector('#_force_refresh_flag');
+        if (frFlag) form.removeChild(frFlag);
         const res = await fetch('/query/start', {{ method: 'POST', body }});
         if (!res.ok) {{
           let msg = "Failed to start query.";
@@ -1201,9 +1201,9 @@ def build_app(
             hit = _cache_module.get(target_value, "full", ttl=CACHE_TTL)
             if hit is not None:
                 cached_payload, cached_at_ts = hit
-                enrich_requested = bool(parse_enrichment_selection(enrich_selection))
-                cache_has_enrich = bool(cached_payload.get("enrichment", {}).get("providers"))
-                if not enrich_requested or cache_has_enrich:
+                resolved_requested = enrichment_manager.resolve_requested(enrich_selection)
+                cached_providers = set(cached_payload.get("enrichment", {}).get("providers", {}).keys())
+                if not resolved_requested or set(resolved_requested).issubset(cached_providers):
                     with jobs_lock:
                         jobs[job_id] = {
                             "done": True,
