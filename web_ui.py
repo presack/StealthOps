@@ -1020,18 +1020,7 @@ def build_app(
         }}
       }}
 
-      window.refreshQuery = function() {{
-        var inp = document.createElement('input');
-        inp.type = 'hidden'; inp.name = 'force_refresh'; inp.value = '1';
-        inp.id = '_force_refresh_flag';
-        var old = form.querySelector('#_force_refresh_flag');
-        if (old) form.removeChild(old);
-        form.appendChild(inp);
-        form.dispatchEvent(new Event('submit', {{bubbles: true, cancelable: true}}));
-      }};
-
-      form.addEventListener('submit', async function(ev) {{
-        ev.preventDefault();
+      async function runQuery(forceRefresh) {{
         const selectedEnrich = Array.from(form.querySelectorAll('input[name="enrich"]:checked')).map(function(i) {{ return i.value; }});
         const pendingEnrichment = selectedEnrich.length
           ? "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Enrichment</h3><div class='rounded-lg border border-cyan-700/60 bg-cyan-900/20 p-3'><p class='text-cyan-200 text-sm'>Gathering enrichment data for "
@@ -1044,8 +1033,7 @@ def build_app(
           + "<section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-4'><h3 class='font-semibold mb-2'>Network Whois record</h3><div class='min-h-[12rem] text-slate-400 text-sm'>Collecting...</div></section>"
           + pendingEnrichment;
         const body = new FormData(form);
-        var frFlag = form.querySelector('#_force_refresh_flag');
-        if (frFlag) form.removeChild(frFlag);
+        if (forceRefresh) body.set('force_refresh', '1');
         const res = await fetch('/query/start', {{ method: 'POST', body }});
         if (!res.ok) {{
           let msg = "Failed to start query.";
@@ -1062,6 +1050,13 @@ def build_app(
           return;
         }}
         pollJob(data.job_id);
+      }}
+
+      window.refreshQuery = function() {{ runQuery(true); }};
+
+      form.addEventListener('submit', function(ev) {{
+        ev.preventDefault();
+        runQuery(false);
       }});
 
       initEnrichmentTabs(document);
