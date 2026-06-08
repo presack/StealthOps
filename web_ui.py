@@ -1194,28 +1194,25 @@ def build_app(
         session_username = getattr(request.state, "username", "") if server_mode else ""
         job_id = uuid.uuid4().hex
 
-        # Cache check for personal / server mode (skip if force_refresh or training mode)
-        # Only use the cache hit if it already contains enrichment data when enrichment is requested,
-        # otherwise fall through to the worker so enrichment actually runs.
-        if not training_mode and not force_refresh:
+        # Cache fast-path for personal / server mode: only when NO enrichment is requested.
+        # When enrichment is requested the worker always runs so new providers can be fetched
+        # and merged with any previously cached provider results.
+        if not training_mode and not force_refresh and not parse_enrichment_selection(enrich_selection):
             hit = _cache_module.get(target_value, "full", ttl=CACHE_TTL)
             if hit is not None:
                 cached_payload, cached_at_ts = hit
-                resolved_requested = enrichment_manager.resolve_requested(enrich_selection)
-                cached_providers = set(cached_payload.get("enrichment", {}).get("providers", {}).keys())
-                if not resolved_requested or set(resolved_requested).issubset(cached_providers):
-                    with jobs_lock:
-                        jobs[job_id] = {
-                            "done": True,
-                            "error": "",
-                            "results": cached_payload,
-                            "target": target_value,
-                            "route_mode": selected_mode,
-                            "enrich_selection": enrich_selection,
-                            "cached_at": cached_at_ts,
-                            "updated_at": time.time(),
-                        }
-                    return JSONResponse({"job_id": job_id})
+                with jobs_lock:
+                    jobs[job_id] = {
+                        "done": True,
+                        "error": "",
+                        "results": cached_payload,
+                        "target": target_value,
+                        "route_mode": selected_mode,
+                        "enrich_selection": enrich_selection,
+                        "cached_at": cached_at_ts,
+                        "updated_at": time.time(),
+                    }
+                return JSONResponse({"job_id": job_id})
 
         with jobs_lock:
             jobs[job_id] = {
@@ -1285,11 +1282,46 @@ def build_app(
                             jobs[job_id]["done"] = True
                             jobs[job_id]["updated_at"] = time.time()
                 else:
-                    # Personal / server mode — check full-result cache first (done before worker starts),
-                    # but store result in cache on completion.
-                    final = local_engine.run_all_staged(target_value, on_update=on_update)
+                    # Personal / server mode.
+                    # Core: use per-target cache so repeat enrichment runs don't re-fetch DNS/WHOIS.
+                    cached_core = _cache_module.get(target_value, "core", ttl=CACHE_TTL)
+                    if cached_core is not None:
+                        final = dict(cached_core[0])
+                        on_update(final)
+                    else:
+                        final = local_engine.run_all_staged(target_value, on_update=on_update)
+                        _cache_module.put(target_value, "core", {k: v for k, v in final.items() if k != "enrichment"})
+
+                    # Enrichment: per-provider cache so each provider is fetched at most once per TTL.
+                    # force_refresh bypasses per-provider cache for selected providers only.
+                    providers_out: dict = {}
                     if parse_enrichment_selection(enrich_selection):
-                        final["enrichment"] = local_enrich.run(target_value, enrich_selection)
+                        resolved = local_enrich.resolve_requested(enrich_selection)
+                        for pname in resolved:
+                            if not force_refresh:
+                                cached_p = _cache_module.get(target_value, pname, ttl=CACHE_TTL)
+                                if cached_p is not None:
+                                    providers_out[pname] = cached_p[0]
+                                    continue
+                            payload = local_enrich.run_one(target_value, pname)
+                            _cache_module.put(target_value, pname, payload)
+                            providers_out[pname] = payload
+
+                    # Merge any previously cached providers not in this run so the panel accumulates.
+                    existing_full = _cache_module.get(target_value, "full", ttl=CACHE_TTL)
+                    if existing_full:
+                        for pname, pdata in existing_full[0].get("enrichment", {}).get("providers", {}).items():
+                            if pname not in providers_out:
+                                providers_out[pname] = pdata
+
+                    if providers_out:
+                        final["enrichment"] = {
+                            "enabled": True,
+                            "selection": parse_enrichment_selection(enrich_selection) or [],
+                            "resolved": list(providers_out.keys()),
+                            "providers": providers_out,
+                            "skipped": [],
+                        }
                     _cache_module.put(target_value, "full", final)
                     with jobs_lock:
                         if job_id in jobs:
