@@ -682,14 +682,15 @@ def build_app(
             else:
                 h = age_secs // 3600
                 age_str = f"{h} hour{'s' if h != 1 else ''}"
-            cache_banner = (
-                "<div class='text-xs text-slate-400 mt-3 mb-1'>"
-                f"Cached result from {age_str} ago — "
-                "<button type='button' onclick='refreshQuery()' "
-                "class='text-cyan-400 underline hover:text-cyan-300'>Refresh</button></div>"
-            )
+            age_label = f"Cached {age_str} ago — "
         else:
-            cache_banner = ""
+            age_label = ""
+        cache_banner = (
+            "<div class='text-xs text-slate-400 mt-3 mb-1'>"
+            f"{age_label}"
+            "<button type='button' onclick='refreshQuery()' "
+            "class='text-cyan-400 underline hover:text-cyan-300'>Refresh</button></div>"
+        )
 
         return cache_banner + download_bar + f"""
 <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl mt-2'>
@@ -1019,7 +1020,7 @@ def build_app(
         }}
       }}
 
-      function refreshQuery() {{
+      window.refreshQuery = function() {{
         var inp = document.createElement('input');
         inp.type = 'hidden'; inp.name = 'force_refresh'; inp.value = '1';
         inp.id = '_force_refresh_flag';
@@ -1027,7 +1028,7 @@ def build_app(
         if (old) form.removeChild(old);
         form.appendChild(inp);
         form.dispatchEvent(new Event('submit', {{bubbles: true, cancelable: true}}));
-      }}
+      }};
 
       form.addEventListener('submit', async function(ev) {{
         ev.preventDefault();
