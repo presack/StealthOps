@@ -1288,6 +1288,9 @@ def build_app(
                     if cached_core is not None:
                         final = dict(cached_core[0])
                         on_update(final)
+                        with jobs_lock:
+                            if job_id in jobs:
+                                jobs[job_id]["cached_at"] = int(cached_core[1])
                     else:
                         final = local_engine.run_all_staged(target_value, on_update=on_update)
                         _cache_module.put(target_value, "core", {k: v for k, v in final.items() if k != "enrichment"})
