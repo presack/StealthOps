@@ -1,5 +1,5 @@
 # release.ps1 — build both binaries, tag, and publish a GitHub release
-# Usage:  .\release.ps1 v1.2.3 ["Release notes here"]
+# Usage:  .\scripts\release.ps1 v1.2.3 ["Release notes here"]
 #
 # Requires: gh CLI authenticated, WSL2 with build-linux.sh dependencies available
 
@@ -9,8 +9,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $ScriptDir
+$ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $ScriptDir
+Set-Location $ProjectRoot
 
 # Validate version format
 if ($Version -notmatch '^v\d+\.\d+\.\d+$') {
@@ -31,11 +32,11 @@ if (git tag -l $Version) {
     exit 1
 }
 
-$WinBin       = Join-Path $ScriptDir "dist\windows\stealthops.exe"
-$LinuxBin     = Join-Path $ScriptDir "dist\linux\stealthops"
-$WinUpload    = Join-Path $ScriptDir "dist\stealthops-windows-x64.exe"
-$LinuxUpload  = Join-Path $ScriptDir "dist\stealthops-linux-x64"
-$ChecksumFile = Join-Path $ScriptDir "dist\checksums.txt"
+$WinBin       = Join-Path $ProjectRoot "dist\windows\stealthops.exe"
+$LinuxBin     = Join-Path $ProjectRoot "dist\linux\stealthops"
+$WinUpload    = Join-Path $ProjectRoot "dist\stealthops-windows-x64.exe"
+$LinuxUpload  = Join-Path $ProjectRoot "dist\stealthops-linux-x64"
+$ChecksumFile = Join-Path $ProjectRoot "dist\checksums.txt"
 
 # Locate gh CLI (check PATH, then common install locations)
 $GhExe = (Get-Command gh -ErrorAction SilentlyContinue)?.Source
@@ -59,7 +60,7 @@ if (-not $GhExe) {
 
 # ── Stamp version ────────────────────────────────────────────────────────────
 $VersionNum = $Version.TrimStart("v")
-Set-Content (Join-Path $ScriptDir "_version.py") "__version__ = `"$VersionNum`"`n"
+Set-Content (Join-Path $ProjectRoot "_version.py") "__version__ = `"$VersionNum`"`n"
 git add "_version.py"
 git commit -m "Bump version to $Version"
 git push
@@ -73,7 +74,7 @@ if (-not (Test-Path $WinBin)) { Write-Error "Windows build failed — $WinBin no
 # ── Build Linux ──────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== Building Linux binary (via WSL) ===" -ForegroundColor Cyan
-wsl bash ./build-linux.sh
+wsl bash scripts/build-linux.sh
 if (-not (Test-Path $LinuxBin)) { Write-Error "Linux build failed — $LinuxBin not found"; exit 1 }
 
 # ── Checksums ────────────────────────────────────────────────────────────────
@@ -122,14 +123,17 @@ $LinuxInstallLine
 "@
 }
 
+$InstallPs1 = Join-Path $ProjectRoot "install.ps1"
+$InstallSh  = Join-Path $ProjectRoot "install.sh"
+
 & $GhExe release create $Version `
     --title "StealthOps $Version" `
     --notes $ReleaseNotes `
     $WinUpload `
     $LinuxUpload `
     "$ChecksumFile#checksums.txt" `
-    "install.ps1#install.ps1" `
-    "install.sh#install.sh"
+    "$InstallPs1#install.ps1" `
+    "$InstallSh#install.sh"
 
 Write-Host ""
 Write-Host "Release $Version published." -ForegroundColor Green

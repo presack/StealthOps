@@ -2,11 +2,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="$SCRIPT_DIR/.venv-build-linux"
-REQ_FILE="$SCRIPT_DIR/requirements.txt"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+VENV_DIR="$PROJECT_ROOT/.venv-build-linux"
+REQ_FILE="$PROJECT_ROOT/requirements.txt"
 HASH_FILE="$VENV_DIR/.req_hash"
 
-mkdir -p "$SCRIPT_DIR/dist/linux" "$SCRIPT_DIR/build/linux"
+mkdir -p "$PROJECT_ROOT/dist/linux" "$PROJECT_ROOT/build/linux"
 
 # Create venv only if it doesn't exist
 if [ ! -f "$VENV_DIR/bin/python" ]; then
@@ -33,13 +34,13 @@ echo "==> Running PyInstaller"
   --noconfirm \
   --onefile \
   --name stealthops \
-  --distpath "$SCRIPT_DIR/dist/linux" \
-  --workpath "$SCRIPT_DIR/build/linux" \
+  --distpath "$PROJECT_ROOT/dist/linux" \
+  --workpath "$PROJECT_ROOT/build/linux" \
   --collect-data whois \
   --collect-submodules uvicorn \
   --collect-submodules fastapi \
   --collect-submodules starlette \
   --hidden-import _version \
-  "$SCRIPT_DIR/main.py"
+  "$PROJECT_ROOT/main.py"
 
-echo "Build complete: $SCRIPT_DIR/dist/linux/stealthops"
+echo "Build complete: $PROJECT_ROOT/dist/linux/stealthops"

@@ -35,7 +35,7 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser.add_argument("--prefer-system-tor", action="store_true", help="Prefer installed system Tor over managed bundled runtime")
     parser.add_argument("--json", action="store_true", help="Emit raw JSON results in CLI mode")
     parser.add_argument("--headers", action="store_true", help="Include HTTP header inspection in CLI/console queries")
-    parser.add_argument("--enrich", default="off", help="Optional enrichment providers: off, all-enabled, allip, alldns, allasn, or CSV (e.g. virustotal,spur)")
+    parser.add_argument("--enrich", default="off", help="Enrichment providers: off, all, or CSV list (e.g. virustotal,spur)")
     parser.add_argument("--enrich-only", action="store_true", help="Run only enrichment providers (requires --enrich)")
     parser.add_argument("--providers", action="store_true", help="Show enrichment provider/key status and exit")
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors in console/CLI output")
@@ -192,8 +192,13 @@ def main() -> int:
         return 0
 
     if args.providers:
+        import os as _os
         manager = EnrichmentManager()
-        for line in manager.format_provider_status_lines():
+        _key_data = None
+        if not _os.environ.get("SERVER_MODE"):
+            from keystore import get_all as _ks_all
+            _key_data = _ks_all()
+        for line in manager.format_provider_status_lines(key_data=_key_data):
             print(line)
         return 0
 

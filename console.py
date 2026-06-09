@@ -213,37 +213,40 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             return 0
 
         if cmd == "help":
-            print("Commands:")
-            print("  query <target>         run lookup on target")
-            print("  <target>               shorthand query (any non-command input)")
-            print("  !<target>              forced shorthand query")
-            print("  last                   show last successful target")
-            print("  last clear             clear last successful target")
-            print("  reload                 re-run last query bypassing 6h cache")
-            print("  full                   re-display last result with all truncation removed")
-            print("  providers              list enrichment provider/key status")
-            print("  quota                  show enrichment usage counters")
-            print("  enrich <off|all-enabled|allip|alldns|allasn|csv>  set enrichment selection")
-            print("  vt <target>            enrichment-only provider query")
-            print("  spur|shodan|censys|viewdns|mxtoolbox|abuseipdb|greynoise|dnsdumpster|dnsdb|urlscan|securitytrails|spamhaus|ripestat|allip|alldns|allasn [target]   enrichment-only provider query (uses last target if omitted)")
-            print("  aliases: vt dd ddb vd mx ab cs gn st us rs, plus allip/alldns/allasn")
-            print("  mode <stealth|public>  set routing mode")
-            print("  tor install            install/update managed Tor runtime")
-            print("  tor status             show Tor status")
-            print("  web [host] [port]      start web server in background")
-            print("  banner                 print full intro banner")
-            print("  status                 print console status banner")
-            print("  block <on|off>         set block non-tor mode")
-            print("  json <on|off>          toggle JSON output")
-            print("  headers <on|off>       toggle HTTP header inspection")
-            print("  report [target] [path] save PDF report for a queried indicator (default: ~/Downloads)")
-            print("  clear                  clear the screen")
-            print("  version                show version")
-            print("  update                 check for and apply the latest release from GitHub")
-            print("  keys                   show API key status for all enrichment providers")
-            print("  set-key [provider key] set a provider API key (no args = interactive wizard)")
-            print("  delete-key <provider>  remove a provider API key from local storage")
-            print("  exit                   quit console")
+            def _h(text: str) -> str:
+                return _c(use_color, text, "1;96")
+            print("")
+            print(f"  {_h('Query')}")
+            print("    <target>                       run lookup (e.g. 8.8.8.8 or example.com)")
+            print("    last [clear]                   show or clear last successful target")
+            print("    reload                         re-run last query bypassing 6h cache")
+            print("    full                           re-display last result with all truncation removed")
+            print("")
+            print(f"  {_h('Enrichment')}")
+            print("    enrich <all|off|provider,...>  set persistent enrichment mode")
+            print("    all [target]                   run all providers now (uses last target if omitted)")
+            print("    <provider> [target]            run single provider (uses last target if omitted)")
+            print("    providers                      provider status, keys, aliases, and session usage")
+            print("")
+            print(f"  {_h('Keys')}")
+            print("    set-key [provider key]         add or update API key (no args = wizard)")
+            print("    delete-key <provider>          remove a key")
+            print("")
+            print(f"  {_h('Output')}")
+            print("    json <on|off>                  toggle JSON output")
+            print("    headers <on|off>               toggle HTTP header inspection")
+            print("    report [target] [path]         save PDF report (default: ~/Downloads)")
+            print("")
+            print(f"  {_h('Routing')}")
+            print("    mode <stealth|public>          switch routing mode")
+            print("    block <on|off>                 block non-Tor traffic")
+            print("    tor install|status             Tor runtime management")
+            print("")
+            print(f"  {_h('Session')}")
+            print("    web [host] [port]              start web server in background")
+            print("    status                         print console status")
+            print("    clear / version / update       utility commands")
+            print("    exit                           quit")
             print("")
             continue
 
@@ -264,15 +267,9 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 print("")
                 continue
             from keystore import get_all as _ks_all
-            all_keys = _ks_all()
-            print("")
-            for provider, info in all_keys.items():
-                source = info["source"]
-                masked = info["masked"] or _c(use_color, "(not set)", "90")
-                src_tag = _c(use_color, f"  [{source}]", "90") if source else ""
-                disp = _c(use_color, info["display_name"], "97")
-                print(f"  {disp:<30} {masked}{src_tag}")
-            print("")
+            _key_data = _ks_all()
+            for line in enrichment_manager.format_provider_status_lines(use_color=use_color, key_data=_key_data):
+                print(line)
             continue
 
         if cmd == "set-key":
@@ -346,26 +343,56 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("")
             continue
 
-        if cmd == "providers":
-            for line in enrichment_manager.format_provider_status_lines(use_color=use_color):
+        if cmd in ("providers", "quota"):
+            import os as _os
+            _key_data = None
+            if not _os.environ.get("SERVER_MODE"):
+                from keystore import get_all as _ks_all
+                _key_data = _ks_all()
+            for line in enrichment_manager.format_provider_status_lines(use_color=use_color, key_data=_key_data):
                 print(line)
-            continue
-
-        if cmd == "quota":
-            for line in enrichment_manager.format_quota_lines():
-                print(line)
-            print("")
             continue
 
         if cmd == "enrich":
             if len(parts) != 2:
-                print("usage: enrich <off|all-enabled|allip|alldns|allasn|csv>")
+                print("usage: enrich <all|off|provider,...>")
                 print("")
                 continue
             enrich_selection = parts[1].strip().lower()
             resolved = enrichment_manager.resolve_requested(enrich_selection)
             print(f"enrichment selection: {enrich_selection}")
             print(f"resolved providers: {', '.join(resolved) if resolved else '-'}")
+            print("")
+            continue
+
+        if cmd == "all":
+            if len(parts) == 2:
+                target = parts[1]
+            elif len(parts) == 1 and last_target:
+                target = last_target
+                print(f"[notice] using last target: {target}")
+            elif len(parts) == 1:
+                print("usage: all <target>  (or run a target first, then type 'all')")
+                print("")
+                continue
+            else:
+                print("usage: all [target]")
+                print("")
+                continue
+            rc, _enrich = execute_enrichment_only(enrichment_manager, target, "all-enabled", emit_json, use_color=use_color)
+            if rc == 0:
+                last_target = target
+                if _enrich and target in session_history:
+                    stored_enrich = session_history[target].setdefault("enrichment", {
+                        "enabled": True, "selection": [], "resolved": [], "skipped": [], "providers": {},
+                    })
+                    stored_enrich["enabled"] = True
+                    stored_enrich.setdefault("providers", {}).update(_enrich.get("providers", {}))
+                    for key in ("selection", "resolved"):
+                        bucket = stored_enrich.setdefault(key, [])
+                        for item in _enrich.get(key, []):
+                            if item not in bucket:
+                                bucket.append(item)
             print("")
             continue
 
@@ -656,7 +683,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("")
             continue
 
-        shorthand_target = raw[1:].strip() if raw.startswith("!") else raw
+        shorthand_target = raw
         if shorthand_target:
             _cache_hit = _cache_module.get(shorthand_target, "full")
             if _cache_hit is not None:

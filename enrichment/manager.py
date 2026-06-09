@@ -95,15 +95,9 @@ PROVIDER_ALIASES: dict[str, str] = {
     "spamhaus": "spamhaus",
     "ripestat": "ripestat",
     "rs": "ripestat",
-    "allip": "allip",
-    "all-ip": "allip",
-    "alldns": "alldns",
-    "all-dns": "alldns",
-    "allasn": "allasn",
-    "all-asn": "allasn",
 }
 
-SELECTION_ALIAS_TOKENS = {"all-enabled", "allip", "alldns", "allasn"}
+SELECTION_ALIAS_TOKENS = {"all-enabled"}
 
 
 def parse_enrichment_selection(raw: str) -> list[str]:
@@ -112,12 +106,6 @@ def parse_enrichment_selection(raw: str) -> list[str]:
         return []
     if text in {"all", "all-enabled"}:
         return ["all-enabled"]
-    if text in {"allip", "all-ip"}:
-        return ["allip"]
-    if text in {"alldns", "all-dns"}:
-        return ["alldns"]
-    if text in {"allasn", "all-asn"}:
-        return ["allasn"]
     tokens: list[str] = []
     for part in text.replace(";", ",").split(","):
         candidate = part.strip()
@@ -207,7 +195,7 @@ class EnrichmentManager:
             }
         return status
 
-    def format_provider_status_lines(self, use_color: bool = True) -> list[str]:
+    def format_provider_status_lines(self, use_color: bool = True, key_data: dict | None = None) -> list[str]:
         _TARGET_LABEL: dict[tuple[str, ...], str] = {
             ("ip", "domain", "url"): "IP · Domain · URL",
             ("ip", "asn"):           "IP · ASN",
@@ -219,13 +207,36 @@ class EnrichmentManager:
         def _c(text: str, code: str) -> str:
             return f"\033[{code}m{text}\033[0m" if use_color else text
 
-        C_NAME, C_TARGETS = 18, 20
+        def _mask(value: str) -> str:
+            if not value:
+                return ""
+            return "••••" if len(value) <= 4 else "••••••••" + value[-4:]
+
+        # Build provider → shortest alias map (exclude entries where alias == provider name)
+        short_alias: dict[str, str] = {}
+        for alias, prov in PROVIDER_ALIASES.items():
+            if alias != prov and prov in PROVIDER_SPECS:
+                if prov not in short_alias or len(alias) < len(short_alias[prov]):
+                    short_alias[prov] = alias
+
+        C_NAME, C_ALIAS, C_TARGETS, C_STATUS, C_KEY, C_CALLS = 20, 5, 18, 12, 22, 5
+
         hdr = (
             f"  {_c('Provider'.ljust(C_NAME), '1;97')}"
+            f"  {_c('Alias'.ljust(C_ALIAS), '1;97')}"
             f"  {_c('Targets'.ljust(C_TARGETS), '1;97')}"
-            f"  {_c('Status', '1;97')}"
+            f"  {_c('Status'.ljust(C_STATUS), '1;97')}"
+            f"  {_c('Key'.ljust(C_KEY), '1;97')}"
+            f"  {_c('Calls'.rjust(C_CALLS), '1;97')}"
         )
-        sep = f"  {_c('─' * C_NAME, '90')}  {_c('─' * C_TARGETS, '90')}  {_c('─' * 11, '90')}"
+        sep = (
+            f"  {_c('─' * C_NAME, '90')}"
+            f"  {_c('─' * C_ALIAS, '90')}"
+            f"  {_c('─' * C_TARGETS, '90')}"
+            f"  {_c('─' * C_STATUS, '90')}"
+            f"  {_c('─' * C_KEY, '90')}"
+            f"  {_c('─' * C_CALLS, '90')}"
+        )
         lines = ["", hdr, sep]
 
         status_map = self.provider_status()
@@ -237,14 +248,38 @@ class EnrichmentManager:
                 tuple(item.get("target_types", [])),
                 " · ".join(item.get("target_types", [])),
             )
-            name_col    = display[:C_NAME].ljust(C_NAME)
-            target_col  = target_label[:C_TARGETS].ljust(C_TARGETS)
-            if has_key:
-                status_str = "● available"
-                row = f"  {_c(name_col + '  ' + target_col + '  ' + status_str, '32')}"
+            alias_str = short_alias.get(name, "—")
+            calls = item.get("usage", {}).get("attempts", 0)
+            calls_str = str(calls) if calls else "—"
+
+            spec = PROVIDER_SPECS[name]
+            if not spec.env_vars:
+                key_str = "(no key required)"
+            elif key_data and name in key_data:
+                kd = key_data[name]
+                masked = kd.get("masked") or "—"
+                src = kd.get("source")
+                key_str = f"{masked}  [{src}]" if src else masked
             else:
-                status_str = "○ no key"
-                row = f"  {_c(name_col + '  ' + target_col + '  ' + status_str, '90')}"
+                raw_keys = self._keys.get(name, [])
+                key_str = _mask(raw_keys[0]) if raw_keys else "—"
+
+            name_col   = display[:C_NAME].ljust(C_NAME)
+            alias_col  = alias_str[:C_ALIAS].ljust(C_ALIAS)
+            target_col = target_label[:C_TARGETS].ljust(C_TARGETS)
+            status_col = ("● available" if has_key else "○ no key").ljust(C_STATUS)
+            key_col    = key_str[:C_KEY].ljust(C_KEY)
+            calls_col  = calls_str.rjust(C_CALLS)
+
+            color = "32" if has_key else "90"
+            row = (
+                f"  {_c(name_col, color)}"
+                f"  {_c(alias_col, color)}"
+                f"  {_c(target_col, color)}"
+                f"  {_c(status_col, color)}"
+                f"  {_c(key_col, color)}"
+                f"  {_c(calls_col, color)}"
+            )
             lines.append(row)
 
         lines.append("")
@@ -268,22 +303,6 @@ class EnrichmentManager:
         for token in parsed:
             if token == "all-enabled":
                 candidates = [name for name in sorted(PROVIDER_SPECS.keys()) if self._provider_accessible(name)]
-            elif token == "allip":
-                candidates = [
-                    name for name in sorted(PROVIDER_SPECS.keys())
-                    if self._provider_accessible(name) and "ip" in PROVIDER_SPECS[name].target_types
-                ]
-            elif token == "alldns":
-                candidates = [
-                    name for name in sorted(PROVIDER_SPECS.keys())
-                    if self._provider_accessible(name)
-                    and ("domain" in PROVIDER_SPECS[name].target_types or "url" in PROVIDER_SPECS[name].target_types)
-                ]
-            elif token == "allasn":
-                candidates = [
-                    name for name in sorted(PROVIDER_SPECS.keys())
-                    if self._provider_accessible(name) and "asn" in PROVIDER_SPECS[name].target_types
-                ]
             elif self._provider_accessible(token):
                 candidates = [token]
             else:
