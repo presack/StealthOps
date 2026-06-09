@@ -1451,6 +1451,12 @@ def build_app(
         username = getattr(request.state, "username", "") if server_mode else ""
 
         # Build key rows
+        _copy_icon = ("<svg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 16 16' fill='currentColor'>"
+                      "<path d='M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1"
+                      "a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z'/>"
+                      "<path d='M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3z"
+                      "m-3-1A1.5 1.5 0 0 0 5 1.5H3.5A1.5 1.5 0 0 0 2 3v.5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V3"
+                      "A1.5 1.5 0 0 0 12.5 1.5H11A1.5 1.5 0 0 0 9.5 0h-3z'/></svg>")
         key_rows_html = ""
         if server_mode and username:
             user_keys = _auth_module.get_keys(username)
@@ -1467,6 +1473,15 @@ def build_app(
                     f"class='text-xs text-red-400 hover:text-red-300 px-2 py-1.5 rounded "
                     f"border border-red-900/50 shrink-0'>Clear</button>"
                 ) if current else ""
+                copy_btn = (
+                    f"<button type='button' onclick='copyKey(\"{input_id}\",this)' title='Copy API key' "
+                    f"class='text-slate-400 hover:text-slate-200 px-2 py-1.5 rounded "
+                    f"border border-slate-700 shrink-0'>{_copy_icon}</button>"
+                    if current else
+                    f"<button type='button' disabled title='No key to copy' "
+                    f"class='text-slate-600 px-2 py-1.5 rounded "
+                    f"border border-slate-700/40 shrink-0 cursor-not-allowed opacity-40'>{_copy_icon}</button>"
+                )
                 key_rows_html += (
                     f"<tr class='border-b border-slate-700/40 last:border-0'>"
                     f"<td class='py-3 pr-4 align-top w-40'>"
@@ -1482,6 +1497,7 @@ def build_app(
                     f"<button type='button' onclick='toggleShow(\"{input_id}\",this)' "
                     f"class='text-xs text-slate-400 hover:text-slate-200 px-2 py-1.5 rounded "
                     f"border border-slate-700 shrink-0'>Show</button>"
+                    f"{copy_btn}"
                     f"{clear_btn}"
                     f"</div>"
                     f"</td></tr>"
@@ -1516,6 +1532,9 @@ def build_app(
                         f"<div class='flex items-center gap-2'>"
                         f"<code class='text-sm font-mono text-slate-400'>{html.escape(masked_val)}</code>"
                         f"<span class='text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 border border-slate-600'>env</span>"
+                        f"<button type='button' disabled title='Key set via env — copy from your environment' "
+                        f"class='text-slate-600 px-2 py-1.5 rounded "
+                        f"border border-slate-700/40 shrink-0 cursor-not-allowed opacity-40'>{_copy_icon}</button>"
                         f"</div>"
                         f"<div class='text-xs text-slate-500 mt-1'>Set via environment variable — add to keys file to make editable here</div>"
                         f"</td></tr>"
@@ -1532,6 +1551,15 @@ def build_app(
                         f"class='text-xs text-red-400 hover:text-red-300 px-2 py-1.5 rounded "
                         f"border border-red-900/50 shrink-0'>Clear</button>"
                     ) if current else ""
+                    copy_btn = (
+                        f"<button type='button' onclick='copyKey(\"{input_id}\",this)' title='Copy API key' "
+                        f"class='text-slate-400 hover:text-slate-200 px-2 py-1.5 rounded "
+                        f"border border-slate-700 shrink-0'>{_copy_icon}</button>"
+                        if current else
+                        f"<button type='button' disabled title='No key to copy' "
+                        f"class='text-slate-600 px-2 py-1.5 rounded "
+                        f"border border-slate-700/40 shrink-0 cursor-not-allowed opacity-40'>{_copy_icon}</button>"
+                    )
                     stored_note = (
                         "<div class='text-xs text-slate-500 mt-1'>saved in keys file</div>"
                     ) if source == "file" else ""
@@ -1547,7 +1575,7 @@ def build_app(
                         f"value='{html.escape(current)}' placeholder='{html.escape(placeholder)}' "
                         f"autocomplete='off' "
                         f"class='flex-1 min-w-0 rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-sm font-mono'/>"
-                        f"{show_btn}{clear_btn}"
+                        f"{show_btn}{copy_btn}{clear_btn}"
                         f"</div>"
                         f"{stored_note}"
                         f"</td></tr>"
@@ -1640,6 +1668,16 @@ function toggleShow(id, btn) {{
   if (!inp) return;
   inp.type = inp.type === 'password' ? 'text' : 'password';
   btn.textContent = inp.type === 'password' ? 'Show' : 'Hide';
+}}
+function copyKey(id, btn) {{
+  var inp = document.getElementById(id);
+  if (!inp || !inp.value) return;
+  navigator.clipboard.writeText(inp.value).then(function() {{
+    var orig = btn.innerHTML;
+    btn.innerHTML = '&#10003;';
+    btn.classList.add('text-green-400');
+    setTimeout(function() {{ btn.innerHTML = orig; btn.classList.remove('text-green-400'); }}, 1500);
+  }});
 }}
 function showSection(name) {{
   document.querySelectorAll('[data-section]').forEach(function(el) {{

@@ -22,41 +22,71 @@ _TRAINING_MODE = bool(os.environ.get("TRAINING_MODE"))
 def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser = argparse.ArgumentParser(description="StealthOps - privacy-hardened reconnaissance utility")
     parser.add_argument("--version", action="version", version=f"StealthOps {__version__}")
-    parser.add_argument("target", nargs="?", help="Domain/URL/IP target for CLI mode")
-    parser.add_argument("--query", help="Domain/URL target for CLI mode")
-    parser.add_argument("--web", action="store_true", help="Run web server mode")
-    parser.add_argument("--console", action="store_true", help="Run interactive console mode")
-    parser.add_argument("--install-tor", action="store_true", help="Install/update managed Tor runtime before query execution")
-    parser.add_argument("--public-route", action="store_true", help="Bypass Tor and run queries over standard network route")
-    parser.add_argument("--mode", choices=["stealth", "public"], help="Routing mode for CLI/console (overrides --public-route)")
-    parser.add_argument("--block-non-tor", action="store_true", help="Fail requests if Tor is unavailable")
-    parser.add_argument("--tor-update", choices=["auto", "off", "force"], default="auto", help="Tor managed-runtime update behavior")
-    parser.add_argument("--tor-update-manifest", help="URL to JSON manifest: {version, windows_url, sha256}")
-    parser.add_argument("--prefer-system-tor", action="store_true", help="Prefer installed system Tor over managed bundled runtime")
-    parser.add_argument("--json", action="store_true", help="Emit raw JSON results in CLI mode")
-    parser.add_argument("--headers", action="store_true", help="Include HTTP header inspection in CLI/console queries")
-    parser.add_argument("--enrich", default="off", help="Enrichment providers: off, all, or CSV list (e.g. virustotal,spur)")
-    parser.add_argument("--enrich-only", action="store_true", help="Run only enrichment providers (requires --enrich)")
-    parser.add_argument("--providers", action="store_true", help="Show enrichment provider/key status and exit")
-    parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors in console/CLI output")
-    parser.add_argument("--pdf", nargs="?", const=True, default=None, metavar="PATH",
-                        help="Save a PDF report to PATH after the query (default: ~/Downloads)")
-    parser.add_argument("--host", default="127.0.0.1", help="Web server bind host")
-    parser.add_argument("--port", type=int, default=5000, help="Web server bind port")
-    # Server mode admin commands
-    parser.add_argument("--create-user", metavar="USERNAME", help="SERVER_MODE: create a user account (prompts for password)")
-    parser.add_argument("--delete-user", metavar="USERNAME", help="SERVER_MODE: delete a user account")
-    parser.add_argument("--list-users", action="store_true", help="SERVER_MODE: list all user accounts")
-    parser.add_argument("--reset-password", metavar="USERNAME", help="SERVER_MODE: reset a user's password (prompts for new password)")
-    parser.add_argument("--set-key", nargs=2, metavar=("PROVIDER", "KEY"), help="SERVER_MODE: set a provider API key (use with --username or --all-users)")
-    parser.add_argument("--delete-key", nargs=2, metavar=("USERNAME", "PROVIDER"), help="SERVER_MODE: remove a user's provider key")
-    parser.add_argument("--copy-keys", nargs=2, metavar=("FROM_USER", "TO_USER"), help="SERVER_MODE: copy all keys from one user to another")
-    parser.add_argument("--username", metavar="USERNAME", help="Target username for --set-key")
-    parser.add_argument("--all-users", action="store_true", help="Apply --set-key to all existing users")
-    parser.add_argument("--generate-fernet-key", action="store_true", help="Generate and print a new FERNET_KEY value")
-    parser.add_argument("--update", action="store_true", help="Check for and apply the latest release from GitHub")
-    parser.add_argument("--configure-keys", action="store_true", help="Interactive API key setup wizard (personal mode)")
-    parser.add_argument("--keys", action="store_true", help="Show API key status for all enrichment providers (personal mode)")
+    parser.add_argument("target", nargs="?", help="Domain, URL, or IP to query")
+    parser.add_argument("--query", metavar="TARGET",
+                        help="Named alternative to the positional target (useful in scripts)")
+
+    exec_grp = parser.add_argument_group("execution mode")
+    exec_grp.add_argument("--console", action="store_true", help="Start the interactive console (REPL)")
+    exec_grp.add_argument("--web", action="store_true", help="Start the web dashboard")
+    exec_grp.add_argument("--update", action="store_true",
+                          help="Check for and apply the latest release from GitHub")
+
+    query_grp = parser.add_argument_group("query options")
+    query_grp.add_argument("--json", action="store_true", help="Output raw JSON instead of a formatted report")
+    query_grp.add_argument("--headers", action="store_true", help="Include HTTP header inspection")
+    query_grp.add_argument("--enrich", default="off", metavar="PROVIDERS",
+                           help="Enrichment providers: off, all, or comma-separated list (e.g. virustotal,spur)")
+    query_grp.add_argument("--enrich-only", action="store_true",
+                           help="Run enrichment providers only, skip core query (requires --enrich)")
+    query_grp.add_argument("--pdf", nargs="?", const=True, default=None, metavar="PATH",
+                           help="Save a PDF report after the query (default path: ~/Downloads)")
+    query_grp.add_argument("--no-color", action="store_true", help="Disable ANSI color output")
+
+    tor_grp = parser.add_argument_group("routing / Tor")
+    tor_grp.add_argument("--mode", choices=["stealth", "public"], default=None,
+                         help="Routing mode: stealth (via Tor) or public (direct); default: public")
+    tor_grp.add_argument("--block-non-tor", action="store_true",
+                         help="Abort the query if Tor is unavailable (stealth mode only)")
+    tor_grp.add_argument("--install-tor", action="store_true",
+                         help="Install or update the managed Tor runtime, then continue")
+    tor_grp.add_argument("--tor-update", choices=["auto", "off", "force"], default="auto",
+                         help="Managed-runtime update policy: auto (default), off, or force")
+    tor_grp.add_argument("--tor-update-manifest", metavar="URL_OR_PATH",
+                         help="Custom Tor manifest (JSON: {version, download_url, sha256})")
+    tor_grp.add_argument("--prefer-system-tor", action="store_true",
+                         help="Prefer system-installed Tor over the managed runtime")
+
+    keys_grp = parser.add_argument_group("key management")
+    keys_grp.add_argument("--providers", action="store_true",
+                          help="Show enrichment provider status and API key info, then exit")
+    keys_grp.add_argument("--configure-keys", action="store_true",
+                          help="Interactive API key setup wizard (personal mode)")
+    keys_grp.add_argument("--set-key", nargs=2, metavar=("PROVIDER", "KEY"),
+                          help="Set a provider API key (personal: saves to keystore;"
+                               " SERVER_MODE: use with --username or --all-users)")
+
+    web_grp = parser.add_argument_group("web server")
+    web_grp.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    web_grp.add_argument("--port", type=int, default=5000, help="Bind port (default: 5000)")
+
+    admin_grp = parser.add_argument_group("server admin (SERVER_MODE only)")
+    admin_grp.add_argument("--create-user", metavar="USERNAME",
+                           help="Create a user account (prompts for password)")
+    admin_grp.add_argument("--delete-user", metavar="USERNAME", help="Delete a user account")
+    admin_grp.add_argument("--list-users", action="store_true", help="List all user accounts")
+    admin_grp.add_argument("--reset-password", metavar="USERNAME",
+                           help="Reset a user's password (prompts for new password)")
+    admin_grp.add_argument("--delete-key", nargs=2, metavar=("USERNAME", "PROVIDER"),
+                           help="Remove a user's provider key")
+    admin_grp.add_argument("--copy-keys", nargs=2, metavar=("FROM_USER", "TO_USER"),
+                           help="Copy all provider keys from one user to another")
+    admin_grp.add_argument("--username", metavar="USERNAME", help="Target username for --set-key")
+    admin_grp.add_argument("--all-users", action="store_true",
+                           help="Apply --set-key to every existing user")
+    admin_grp.add_argument("--generate-fernet-key", action="store_true",
+                           help="Generate and print a new FERNET_KEY value")
+
     return parser, parser.parse_args()
 
 
@@ -172,23 +202,6 @@ def main() -> int:
             return 0
         from keystore import run_setup_wizard
         run_setup_wizard()
-        return 0
-
-    if args.keys:
-        if _SERVER_MODE:
-            print("In SERVER_MODE, manage keys via the web UI at /settings")
-            return 0
-        from keystore import get_all, mask
-        use_color = color_enabled(args.no_color)
-        all_keys = get_all()
-        print("")
-        for provider, info in all_keys.items():
-            source = info["source"]
-            masked = info["masked"] or "(not set)"
-            src_tag = f"  [{info['source']}]" if source else ""
-            line = f"  {info['display_name']:<22} {masked}{src_tag}"
-            print(line)
-        print("")
         return 0
 
     if args.providers:
