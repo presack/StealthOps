@@ -284,7 +284,7 @@ class TorEngine:
     def preview_update_source(self) -> str:
         try:
             candidate = self.updater.preview_update_source()
-            return f"Ready to download Tor {candidate['version']} from: {candidate['windows_url']}"
+            return f"Ready to download Tor {candidate['version']} from: {candidate['download_url']}"
         except Exception as exc:
             return f"Unable to resolve update source: {exc}"
 

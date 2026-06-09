@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -61,7 +62,21 @@ class TorUpdater:
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
             return Path(local_app_data) / app_name / "tor"
-        return Path.home() / f".{app_name.lower()}" / "tor"
+        xdg_data = os.environ.get("XDG_DATA_HOME")
+        base = Path(xdg_data) if xdg_data else Path.home() / ".local" / "share"
+        return base / app_name.lower() / "tor"
+
+    @staticmethod
+    def _platform_bundle_suffix() -> str:
+        """Return the Tor Project bundle platform suffix for the current OS/arch."""
+        if os.name == "nt":
+            return "windows-x86_64"
+        machine = platform.machine().lower()
+        arch = "aarch64" if machine in ("aarch64", "arm64") else "x86_64"
+        system = platform.system().lower()
+        if system == "darwin":
+            return f"macos-{arch}"
+        return f"linux-{arch}"
 
     @property
     def managed_tor_exe(self) -> Path:
@@ -150,21 +165,26 @@ class TorUpdater:
         response.raise_for_status()
         html_text = response.text
 
-        matches = re.findall(
-            r'href=["\']([^"\']*tor-expert-bundle-windows-x86_64-([0-9]+(?:\.[0-9]+)+)\.tar\.gz)["\']',
-            html_text,
+        suffix = self._platform_bundle_suffix()
+        pattern = (
+            r'href=["\']([^"\']*tor-expert-bundle-'
+            + re.escape(suffix)
+            + r'-([0-9]+(?:\.[0-9]+)+)\.tar\.gz)["\']'
         )
+        matches = re.findall(pattern, html_text)
         if not matches:
-            raise RuntimeError("unable to discover tor expert bundle from torproject.org download page")
+            raise RuntimeError(
+                f"unable to discover tor expert bundle for {suffix} from torproject.org download page"
+            )
 
         candidates: list[tuple[str, str]] = []
         for href, version in matches:
             absolute_url = urljoin(page_url, href)
             candidates.append((version, absolute_url))
 
-        latest_version, windows_url = sorted(candidates, key=lambda item: self._version_key(item[0]))[-1]
-        filename = Path(urlparse(windows_url).path).name
-        sums_url = urljoin(windows_url, "sha256sums-signed-build.txt")
+        latest_version, download_url = sorted(candidates, key=lambda item: self._version_key(item[0]))[-1]
+        filename = Path(urlparse(download_url).path).name
+        sums_url = urljoin(download_url, "sha256sums-signed-build.txt")
 
         sums_resp = requests.get(sums_url, timeout=20)
         sums_resp.raise_for_status()
@@ -178,7 +198,7 @@ class TorUpdater:
         if not expected_sha:
             raise RuntimeError(f"could not locate sha256 for {filename} in {sums_url}")
 
-        return {"version": latest_version, "windows_url": windows_url, "sha256": expected_sha}
+        return {"version": latest_version, "download_url": download_url, "sha256": expected_sha}
 
     def _fetch_manifest(self) -> dict[str, Any]:
         manifest_source = self.manifest_url
@@ -204,21 +224,25 @@ class TorUpdater:
         else:
             manifest = json.loads(Path(manifest_source).read_text(encoding="utf-8"))
 
-        required = ["version", "windows_url", "sha256"]
+        # Accept legacy 'windows_url' key from older manifests
+        if "download_url" not in manifest and "windows_url" in manifest:
+            manifest["download_url"] = manifest["windows_url"]
+
+        required = ["version", "download_url", "sha256"]
         missing = [key for key in required if key not in manifest]
         if missing:
             raise RuntimeError(f"manifest missing keys: {', '.join(missing)}")
-        if "example.com" in str(manifest.get("windows_url", "")):
+        if "example.com" in str(manifest.get("download_url", "")):
             if source_kind == "local_file":
                 return self._fetch_official_tor_project_manifest()
-            raise RuntimeError("manifest appears to be a template; replace windows_url/sha256 with real values")
+            raise RuntimeError("manifest appears to be a template; replace download_url/sha256 with real values")
 
         return manifest
 
     def preview_update_source(self) -> dict[str, Any]:
         """Return the current resolved update candidate without downloading."""
         manifest = self._fetch_manifest()
-        return {"version": str(manifest["version"]), "windows_url": str(manifest["windows_url"])}
+        return {"version": str(manifest["version"]), "download_url": str(manifest["download_url"])}
 
     @staticmethod
     def _sha256_file(path: Path) -> str:
@@ -321,10 +345,10 @@ class TorUpdater:
             self.managed_root.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="stealthops-tor-") as tmp_dir:
                 temp_dir = Path(tmp_dir)
-                archive_name = Path(str(manifest["windows_url"])).name or "tor_bundle.zip"
+                archive_name = Path(str(manifest["download_url"])).name or "tor_bundle.tar.gz"
                 archive_path = temp_dir / archive_name
 
-                downloaded_bytes, _ = self._download(str(manifest["windows_url"]), archive_path)
+                downloaded_bytes, _ = self._download(str(manifest["download_url"]), archive_path)
 
                 expected = str(manifest["sha256"]).lower().strip()
                 actual = self._sha256_file(archive_path)
@@ -337,6 +361,9 @@ class TorUpdater:
                 staged_exe = self._find_tor_executable(staged)
                 if not staged_exe:
                     raise RuntimeError("updated bundle does not contain tor executable")
+
+                if os.name != "nt":
+                    staged_exe.chmod(staged_exe.stat().st_mode | 0o111)
 
                 self._activate_staged(staged)
 
