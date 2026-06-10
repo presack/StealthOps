@@ -196,22 +196,22 @@ class TorEngine:
             self.last_error = "tor binary not found (set TOR_PATH, install tor, or bundle tor runtime)"
             return False
 
-        self.data_dir.mkdir(exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        if os.name != "nt":
+            return self._start_tor_posix(tor_cmd, timeout)
 
         try:
-            launch_args = {
-                "config": {
+            self.process = launch_tor_with_config(
+                config={
                     "SocksPort": str(self.socks_port),
                     "ControlPort": str(self.control_port),
                     "DataDirectory": str(self.data_dir.resolve()),
                     "CookieAuthentication": "1",
                 },
-                "tor_cmd": tor_cmd,
-                "take_ownership": True,
-            }
-            if os.name != "nt":
-                launch_args["timeout"] = timeout
-            self.process = launch_tor_with_config(**launch_args)
+                tor_cmd=tor_cmd,
+                take_ownership=True,
+            )
         except Exception as exc:  # pragma: no cover - depends on runtime tor env
             self.last_error = f"failed launching tor: {exc}"
             return False
@@ -223,6 +223,61 @@ class TorEngine:
             time.sleep(0.5)
 
         self.last_error = "tor launched but SOCKS port never became reachable"
+        return False
+
+    def _start_tor_posix(self, tor_cmd: str, timeout: int) -> bool:
+        """Launch Tor on Linux/macOS without stem's bootstrap watcher.
+
+        Uses a direct subprocess so we can set LD_LIBRARY_PATH (the Tor
+        Expert Bundle ships libcrypto/libssl alongside the binary and needs
+        $ORIGIN resolution to work; some WSL2 configurations break that),
+        capture real stderr on failure, and poll the SOCKS port ourselves.
+        """
+        tor_dir = Path(tor_cmd).parent
+        env = os.environ.copy()
+        existing_ldpath = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = (
+            f"{tor_dir}:{existing_ldpath}" if existing_ldpath else str(tor_dir)
+        )
+
+        try:
+            self.process = subprocess.Popen(
+                [
+                    tor_cmd,
+                    "--SocksPort", str(self.socks_port),
+                    "--ControlPort", str(self.control_port),
+                    "--DataDirectory", str(self.data_dir.resolve()),
+                    "--CookieAuthentication", "1",
+                    "--quiet",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+        except Exception as exc:
+            self.last_error = f"failed launching tor: {exc}"
+            return False
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._port_open(self.socks_host, self.socks_port):
+                self.last_error = None
+                return True
+            if self.process.poll() is not None:
+                try:
+                    raw = self.process.stderr.read().decode("utf-8", errors="replace").strip()
+                    detail = raw[-300:] if raw else "no output captured"
+                except Exception:
+                    detail = "could not read stderr"
+                self.last_error = f"tor exited early: {detail}"
+                return False
+            time.sleep(0.5)
+
+        try:
+            self.process.kill()
+        except Exception:
+            pass
+        self.last_error = "tor did not open SOCKS port within timeout"
         return False
 
     def verify_circuit(self, timeout: int = 12) -> bool:
