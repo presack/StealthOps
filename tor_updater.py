@@ -59,9 +59,9 @@ class TorUpdater:
 
     @staticmethod
     def _default_managed_root(app_name: str) -> Path:
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if local_app_data:
-            return Path(local_app_data) / app_name / "tor"
+        if os.name == "nt":
+            base = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+            return Path(base) / app_name / "tor"
         xdg_data = os.environ.get("XDG_DATA_HOME")
         base = Path(xdg_data) if xdg_data else Path.home() / ".local" / "share"
         return base / app_name.lower() / "tor"
