@@ -25,7 +25,7 @@ class TorEngine:
         socks_host: str = "127.0.0.1",
         socks_port: int = 9050,
         control_port: int = 9051,
-        data_dir: str = ".tor_data",
+        data_dir: str | None = None,
         tor_update_mode: str = "auto",
         tor_update_manifest: str | None = None,
         prefer_system_tor: bool = False,
@@ -35,7 +35,7 @@ class TorEngine:
         self.socks_host = socks_host
         self.socks_port = socks_port
         self.control_port = control_port
-        self.data_dir = Path(data_dir)
+        self.data_dir = Path(data_dir) if data_dir else self._default_data_dir()
         self.process: Optional[subprocess.Popen] = None
         self.last_error: Optional[str] = None
         self.last_update_message: Optional[str] = None
@@ -61,6 +61,15 @@ class TorEngine:
     @property
     def proxy_url(self) -> str:
         return f"socks5h://{self.socks_host}:{self.socks_port}"
+
+    @staticmethod
+    def _default_data_dir() -> Path:
+        if os.name == "nt":
+            base = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+            return Path(base) / "StealthOps" / "tor_data"
+        xdg = os.environ.get("XDG_DATA_HOME")
+        base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+        return base / "stealthops" / "tor_data"
 
     @staticmethod
     def _app_base_dir() -> Path:
@@ -177,7 +186,7 @@ class TorEngine:
 
         return selected
 
-    def start_tor(self, timeout: int = 45) -> bool:
+    def start_tor(self, timeout: int = 120) -> bool:
         if self._discover_active_proxy():
             self.last_error = None
             return True
