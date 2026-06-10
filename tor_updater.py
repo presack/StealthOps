@@ -152,7 +152,10 @@ class TorUpdater:
     def _find_tor_executable(root: Path) -> Path | None:
         candidates = [p for p in root.rglob("tor.exe")]
         if not candidates:
-            candidates = [p for p in root.rglob("tor") if p.is_file()]
+            candidates = [
+                p for p in root.rglob("tor")
+                if p.is_file() and p.parent.name != "debug"
+            ]
         return candidates[0] if candidates else None
 
     @staticmethod
