@@ -154,6 +154,12 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
     last_target: str = ""
     session_history: dict[str, dict] = {}  # target -> result data, most recent last
 
+    def _print_interrupted() -> None:
+        sys.stderr.write("\r" + " " * 40 + "\r")
+        sys.stderr.flush()
+        print("\ninterrupted")
+        print("")
+
     def shutdown_web() -> None:
         nonlocal web_process
         if not web_process:
@@ -178,9 +184,8 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("")
             return 0
         except KeyboardInterrupt:
-            shutdown_web()
             print("")
-            return 0
+            continue
 
         if "\x0c" in raw_in and raw_in.replace("\x0c", "").strip() == "":
             os.system("cls" if os.name == "nt" else "clear")
@@ -261,7 +266,10 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
 
         if cmd == "update":
             from updater import do_update
-            do_update(use_color)
+            try:
+                do_update(use_color)
+            except KeyboardInterrupt:
+                _print_interrupted()
             continue
 
         if cmd == "keys":
@@ -383,7 +391,11 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 print("usage: all [target]")
                 print("")
                 continue
-            rc, _enrich = execute_enrichment_only(enrichment_manager, target, "all-enabled", emit_json, use_color=use_color)
+            try:
+                rc, _enrich = execute_enrichment_only(enrichment_manager, target, "all-enabled", emit_json, use_color=use_color)
+            except KeyboardInterrupt:
+                _print_interrupted()
+                continue
             if rc == 0:
                 last_target = target
                 if _enrich and target in session_history:
@@ -469,11 +481,15 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                     del session_history[next(iter(session_history))]
                 print("")
                 continue
-            rc, _result = execute_query(
-                query_engine, target, emit_json,
-                use_color=use_color, include_headers=include_headers,
-                enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
-            )
+            try:
+                rc, _result = execute_query(
+                    query_engine, target, emit_json,
+                    use_color=use_color, include_headers=include_headers,
+                    enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
+                )
+            except KeyboardInterrupt:
+                _print_interrupted()
+                continue
             if rc == 0 and _result:
                 last_target = target
                 _cache_module.put(target, "full", _result)
@@ -501,7 +517,11 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 print(f"usage: {cmd} [target]")
                 print("")
                 continue
-            rc, _enrich = execute_enrichment_only(enrichment_manager, target, provider_cmd, emit_json, use_color=use_color)
+            try:
+                rc, _enrich = execute_enrichment_only(enrichment_manager, target, provider_cmd, emit_json, use_color=use_color)
+            except KeyboardInterrupt:
+                _print_interrupted()
+                continue
             if rc == 0:
                 last_target = target
                 if _enrich and target in session_history:
@@ -543,7 +563,11 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             action = parts[1].lower()
             if action == "install":
                 print("[privacy] starting managed Tor install/update")
-                message = tor_engine.manage_tor_runtime(force_update=True)
+                try:
+                    message = tor_engine.manage_tor_runtime(force_update=True)
+                except KeyboardInterrupt:
+                    _print_interrupted()
+                    continue
                 print(f"[privacy] tor_runtime={message}")
                 tor_ok = tor_engine.ensure_tor() if query_engine.config.route_mode == "stealth" else False
                 print(render_status_lines(query_engine, tor_engine, tor_ok, emit_json, use_color))
@@ -595,11 +619,15 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 print("")
                 continue
             target = last_target
-            rc, _result = execute_query(
-                query_engine, target, emit_json,
-                use_color=use_color, include_headers=include_headers,
-                enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
-            )
+            try:
+                rc, _result = execute_query(
+                    query_engine, target, emit_json,
+                    use_color=use_color, include_headers=include_headers,
+                    enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
+                )
+            except KeyboardInterrupt:
+                _print_interrupted()
+                continue
             if rc == 0 and _result:
                 last_target = target
                 _cache_module.put(target, "full", _result)
@@ -680,6 +708,9 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                     route_mode=query_engine.config.route_mode,
                 )
                 print(f"report saved: {_c(use_color, str(saved), '92')}")
+            except KeyboardInterrupt:
+                _print_interrupted()
+                continue
             except RuntimeError as exc:
                 print(f"error: {exc}")
             except Exception as exc:
@@ -707,7 +738,8 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 while True:
                     try:
                         _line = input("  ").strip()
-                    except EOFError:
+                    except (EOFError, KeyboardInterrupt):
+                        print("")
                         break
                     if not _line:
                         break
@@ -735,14 +767,18 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             from bulk import bulk_query as _bulk_query, write_csv as _write_csv
             from pathlib import Path as _Path
 
-            _bulk_rows = _bulk_query(
-                bulk_targets,
-                query_engine,
-                enrichment_manager,
-                enrich_selection=enrich_selection,
-                force_refresh=False,
-                on_progress=_bulk_progress,
-            )
+            try:
+                _bulk_rows = _bulk_query(
+                    bulk_targets,
+                    query_engine,
+                    enrichment_manager,
+                    enrich_selection=enrich_selection,
+                    force_refresh=False,
+                    on_progress=_bulk_progress,
+                )
+            except KeyboardInterrupt:
+                _print_interrupted()
+                continue
 
             sys.stderr.write("\r" + " " * 40 + "\r")
             sys.stderr.flush()
@@ -779,11 +815,15 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                     del session_history[next(iter(session_history))]
                 print("")
                 continue
-            rc, _result = execute_query(
-                query_engine, shorthand_target, emit_json,
-                use_color=use_color, include_headers=include_headers,
-                enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
-            )
+            try:
+                rc, _result = execute_query(
+                    query_engine, shorthand_target, emit_json,
+                    use_color=use_color, include_headers=include_headers,
+                    enrichment_manager=enrichment_manager, enrichment_selection=enrich_selection,
+                )
+            except KeyboardInterrupt:
+                _print_interrupted()
+                continue
             if rc == 0 and _result:
                 last_target = shorthand_target
                 _cache_module.put(shorthand_target, "full", _result)
