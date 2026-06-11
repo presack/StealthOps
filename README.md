@@ -1,6 +1,6 @@
 # StealthOps
 
-Privacy-hardened OSINT and network reconnaissance. DNS, WHOIS, MX records, HTTP headers, and 14 threat-intel enrichment providers — with optional Tor routing for operational security.
+Privacy-hardened OSINT and network reconnaissance. DNS, WHOIS, MX records, HTTP headers, and 17 threat-intel enrichment providers — with optional Tor routing for operational security.
 
 ![Web dashboard](assets/screenshot-web-result.png)
 
@@ -55,6 +55,7 @@ Key commands:
 ```
 # Query
 8.8.8.8                       look up a target (any IP, domain, or URL)
+                              defanged indicators accepted: 8.8[.]8.8, example[.]com
 last / reload / full          recall / re-fetch (bypass cache) / expand last result
 
 # Enrichment
@@ -62,6 +63,10 @@ enrich all                    persistent mode: run all providers on every query
 all                           run all providers now on the last target
 vt / shodan / cs / ab ...     run a single provider (uses last target if omitted)
 providers                     provider status, keys, aliases, and session usage
+
+# Bulk triage
+bulk                          paste a list of indicators → triage CSV saved to ~/Downloads
+bulk /path/to/file.txt        read indicators from file → same CSV output
 
 # Keys
 set-key                       interactive API key setup wizard
@@ -100,7 +105,33 @@ stealthops --update
 stealthops --web
 ```
 
-Opens at `http://127.0.0.1:5000`. Select enrichment providers via checkboxes, toggle stealth mode, and download PDF reports — all from the browser. Includes a Settings page (⚙ icon) for managing API keys without touching the command line.
+Opens at `http://127.0.0.1:5000`. Select enrichment providers via checkboxes, toggle stealth mode, and download PDF reports — all from the browser. Includes a Settings page (⚙ icon) for managing API keys without touching the command line, and a Bulk page for triage CSV export.
+
+---
+
+### Bulk triage
+
+Submit a list of mixed indicators (IPs, domains, ASNs) and get a single CSV spreadsheet covering all of them — useful for quickly triaging a set of IOCs before deciding which ones warrant deeper investigation.
+
+**Console:**
+
+```
+bulk                  enter paste mode — type indicators one per line, blank line to submit
+bulk indicators.txt   read from file
+```
+
+The CSV is saved to `~/Downloads/stealthops-bulk-YYYYMMDD-HHMMSS.csv`. The session's active enrichment selection is used (e.g. `enrich all` or a specific provider list).
+
+**Web UI:** navigate to `/bulk`, paste indicators into the text box, select providers (VT + AbuseIPDB + GreyNoise + OTX pre-checked), and submit. A progress bar tracks completion; click Download CSV when done.
+
+**Triage columns** (24 total — blank where not applicable to the indicator type):
+
+| Group | Columns |
+|---|---|
+| Core | Target, Type, PTR/Hostname, Resolved IPs, ASN, Organization, Country, CIDR, City |
+| Domain | Registrar, Created, Expires, Domain Status, Nameservers, MX Hosts |
+| Threat intel | VT Malicious, VT Reputation, AbuseIPDB Score, AbuseIPDB Risk, GreyNoise, Shodan, OTX Pulses, IPv4 Prefixes |
+| | Notes |
 
 ![Web UI](assets/screenshot-web.png)
 
@@ -108,24 +139,27 @@ Opens at `http://127.0.0.1:5000`. Select enrichment providers via checkboxes, to
 
 ## Enrichment providers
 
-14 providers. Run `stealthops --configure-keys` to enter keys interactively, or use `set-key` in console mode.
+17 providers. Run `stealthops --configure-keys` to enter keys interactively, or use `set-key` in console mode.
 
-| Provider | Alias | Targets |
-|---|---|---|
-| VirusTotal | `vt` | IP · Domain · URL |
-| ViewDNS | `vd` | IP · Domain · URL |
-| MXToolbox | `mx` | IP · Domain · URL |
-| DNSDB | `ddb` | IP · Domain · URL |
-| urlscan.io | `us` | IP · Domain · URL |
-| Shodan | — | IP · ASN |
-| Censys | `cs` | IP · ASN |
-| GreyNoise | `gn` | IP · ASN |
-| Spur | — | IP |
-| AbuseIPDB | `ab` | IP |
-| DNSDumpster | `dd` | Domain · URL |
-| SecurityTrails | `st` | Domain · URL |
-| Spamhaus ASN-DROP | — | ASN |
-| RIPEstat | `rs` | ASN |
+| Provider | Alias | Targets | Key required |
+|---|---|---|---|
+| VirusTotal | `vt` | IP · Domain · URL | Yes |
+| ViewDNS | `vd` | IP · Domain · URL | Yes |
+| MXToolbox | `mx` | IP · Domain · URL | Yes |
+| DNSDB | `ddb` | IP · Domain · URL | Yes |
+| urlscan.io | `us` | IP · Domain · URL | Yes |
+| AlienVault OTX | `otx` | IP · Domain | Yes |
+| Shodan | — | IP · ASN | Yes |
+| Censys | `cs` | IP · ASN | Yes |
+| GreyNoise | `gn` | IP · ASN | Yes |
+| Spur | — | IP | Yes |
+| AbuseIPDB | `ab` | IP | Yes |
+| ipinfo.io | — | IP | No (free tier) |
+| DNSDumpster | `dd` | Domain · URL | Yes |
+| SecurityTrails | `st` | Domain · URL | Yes |
+| BGPView | `bv` | ASN | No (free) |
+| Spamhaus ASN-DROP | — | ASN | No (free) |
+| RIPEstat | `rs` | ASN | No (free) |
 
 Keys are stored in `%LOCALAPPDATA%\StealthOps\keys.env` (Windows) or `~/.config/stealthops/keys.env` (Linux). Environment variables take precedence if set.
 

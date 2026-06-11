@@ -21,6 +21,7 @@ TRIAGE_COLUMNS = [
     "Organization",
     "Country",
     "CIDR",
+    "City",
     "Registrar",
     "Created",
     "Expires",
@@ -33,11 +34,13 @@ TRIAGE_COLUMNS = [
     "AbuseIPDB Risk",
     "GreyNoise",
     "Shodan",
+    "OTX Pulses",
+    "IPv4 Prefixes",
     "Notes",
 ]
 
 # Pre-checked provider set on the web UI triage form
-TRIAGE_PRESET_PROVIDERS = {"virustotal", "abuseipdb", "greynoise"}
+TRIAGE_PRESET_PROVIDERS = {"virustotal", "abuseipdb", "greynoise", "otx"}
 
 
 def _safe(value: object) -> str:
@@ -149,6 +152,25 @@ def flatten_result(target: str, result: dict) -> dict[str, str]:
         else:
             ports = shodan.get("open_port_count")
             row["Shodan"] = f"{ports} open ports" if ports is not None else ""
+
+    # ipinfo (IP only — city geo detail)
+    ipinfo = providers.get("ipinfo") or {}
+    if ipinfo and not ipinfo.get("error") and not ipinfo.get("unsupported_target_type"):
+        row["City"] = _safe(ipinfo.get("city"))
+
+    # AlienVault OTX (IP + domain — threat feed pulse count)
+    otx = providers.get("otx") or {}
+    if otx and not otx.get("error") and not otx.get("unsupported_target_type"):
+        count = otx.get("pulse_count")
+        if count is not None:
+            row["OTX Pulses"] = str(count)
+
+    # BGPView (ASN only — prefix count signals network size)
+    bgpview = providers.get("bgpview") or {}
+    if bgpview and not bgpview.get("error") and not bgpview.get("unsupported_target_type"):
+        pfx = bgpview.get("ipv4_prefix_count")
+        if pfx is not None:
+            row["IPv4 Prefixes"] = str(pfx)
 
     row["Notes"] = "; ".join(errors)
     return row
