@@ -887,12 +887,17 @@ def build_app(
             "<a href='/download' class='text-slate-400 hover:text-slate-100 text-sm leading-none' "
             "title='Download / Install StealthOps'>&#8595; Install</a>"
         )
+        _bulk_nav = (
+            "<a href='/bulk' class='text-slate-400 hover:text-slate-100 text-sm leading-none' "
+            "title='Bulk indicator triage'>Bulk</a>"
+        )
 
         # Right-side nav: gear icon (personal) or user settings badge (server)
         if training_mode:
-            _settings_nav = _download_nav
+            _settings_nav = f"{_bulk_nav}{_download_nav}"
         elif server_mode and username:
             _settings_nav = (
+                f"{_bulk_nav}"
                 f"{_download_nav}"
                 f"<a href='/settings' class='flex items-center gap-1.5 px-3 py-1.5 rounded-lg "
                 f"bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200'>"
@@ -905,6 +910,7 @@ def build_app(
             )
         else:
             _settings_nav = (
+                f"{_bulk_nav}"
                 f"{_download_nav}"
                 f"<a href='/settings' class='text-slate-400 hover:text-slate-100 text-2xl leading-none' title='Settings'>⚙</a>"
             )
@@ -1345,6 +1351,8 @@ def build_app(
             job = jobs.get(job_id)
             if not job:
                 return JSONResponse({"done": True, "error": "job not found", "html": "<p class='text-red-400'>Query job not found.</p>"}, status_code=404)
+            if job.get("bulk"):
+                return JSONResponse({"done": True, "error": "use /bulk/status for bulk jobs", "html": ""}, status_code=400)
             results = job.get("results", {})
             done = bool(job.get("done"))
             error = str(job.get("error") or "")
@@ -1404,6 +1412,348 @@ def build_app(
             )
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
+
+    # ── Bulk triage ───────────────────────────────────────────────────────────
+
+    @app.get("/bulk", response_class=HTMLResponse)
+    async def bulk_page(request: Request) -> HTMLResponse:
+        username = getattr(request.state, "username", "") if server_mode else ""
+        user_keys = _auth_module.get_keys(username) if (server_mode and username) else {}
+        enrich_mgr = EnrichmentManager(key_overrides=user_keys) if user_keys else enrichment_manager
+        providers = enrich_mgr.provider_status()
+        max_targets = 20 if training_mode else 50
+
+        from bulk import TRIAGE_COLUMNS, TRIAGE_PRESET_PROVIDERS
+        if training_mode:
+            enabled_names = sorted(
+                name for name, item in providers.items()
+                if item.get("has_key") and item.get("adapter_ready")
+            )
+            provider_strip = (
+                "<div class='mt-3 flex flex-wrap gap-2 items-center'>"
+                + "".join(
+                    f"<span class='px-2 py-1 rounded-md border border-emerald-700 bg-emerald-900/30 text-emerald-200 text-xs'>{html.escape(name)}</span>"
+                    for name in enabled_names
+                )
+                + (
+                    "<span class='text-xs text-slate-400 self-center ml-1'>All enabled providers will run automatically.</span>"
+                    if enabled_names else
+                    "<span class='text-xs text-slate-400'>No enrichment providers configured.</span>"
+                )
+                + "</div>"
+            )
+        else:
+            provider_labels: list[str] = []
+            for name in sorted(PROVIDER_SPECS.keys()):
+                item = providers.get(name, {})
+                has_key = bool(item.get("has_key"))
+                adapter_ready = bool(item.get("adapter_ready"))
+                checked = "checked" if (name in TRIAGE_PRESET_PROVIDERS and has_key and adapter_ready) else ""
+                disabled = "" if has_key and adapter_ready else "disabled"
+                chip_class = (
+                    "border-emerald-500 bg-emerald-900/30 text-emerald-200"
+                    if has_key and adapter_ready
+                    else ("border-amber-500 bg-amber-900/20 text-amber-200" if has_key else "border-slate-700 bg-slate-900/50 text-slate-400")
+                )
+                provider_labels.append(
+                    "<label data-provider-chip='1' class='inline-flex items-center gap-2 px-2 py-1 rounded-md border transition "
+                    + chip_class
+                    + "'>"
+                    + f"<input type='checkbox' name='enrich' value='{html.escape(name)}' {checked} {disabled} class='accent-cyan-500' />"
+                    + f"<span class='text-xs'>{html.escape(name)}</span>"
+                    + "</label>"
+                )
+            provider_strip = (
+                "<div class='mt-3 flex flex-wrap gap-2'>"
+                + "".join(provider_labels)
+                + "</div>"
+            )
+
+        _settings_nav_bulk = ""
+        if server_mode and username:
+            _settings_nav_bulk = (
+                f"<a href='/settings' class='flex items-center gap-1.5 px-3 py-1.5 rounded-lg "
+                f"bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm text-slate-200'>"
+                f"<span class='text-slate-400 text-base leading-none'>⚙</span>"
+                f"<span>{html.escape(username)}</span>"
+                f"</a>"
+                f"<form method='post' action='/logout' style='display:inline'>"
+                f"<button class='text-sm text-slate-400 hover:text-white'>Sign out</button>"
+                f"</form>"
+            )
+        elif not training_mode:
+            _settings_nav_bulk = (
+                f"<a href='/settings' class='text-slate-400 hover:text-slate-100 text-2xl leading-none' title='Settings'>⚙</a>"
+            )
+
+        columns_preview = ", ".join(TRIAGE_COLUMNS)
+        return HTMLResponse(f"""<!doctype html>
+<html>
+<head>
+  <meta charset='utf-8' />
+  <meta name='viewport' content='width=device-width, initial-scale=1' />
+  <title>StealthOps — Bulk Triage</title>
+  <script src='{TAILWIND_CDN}'></script>
+</head>
+<body class='bg-slate-950 text-slate-100 min-h-screen'>
+  <main class='max-w-6xl mx-auto p-6'>
+    <header class='flex items-center justify-between mb-8'>
+      <div>
+        <a href='/' class='hover:opacity-80 transition-opacity'>
+          <h1 class='text-3xl font-bold tracking-tight'>StealthOps</h1>
+        </a>
+        <p class='text-slate-400 text-xs mt-1'>Bulk indicator triage</p>
+      </div>
+      <div class='flex items-center gap-3'>
+        <a href='/download' class='text-slate-400 hover:text-slate-100 text-sm leading-none' title='Download / Install StealthOps'>&#8595; Install</a>
+        {_settings_nav_bulk}
+      </div>
+    </header>
+
+    <section class='bg-slate-800/70 rounded-xl p-5 shadow-xl'>
+      <h2 class='text-lg font-semibold mb-1'>Bulk Indicator Triage</h2>
+      <p class='text-sm text-slate-400 mb-4'>
+        Paste one indicator per line — IPs, domains, or ASNs (e.g. <code class='text-slate-300'>AS15169</code>).
+        Up to {max_targets} targets per job. Exports a CSV with key triage fields for each indicator.
+      </p>
+
+      <div id='form-area'>
+        <form id='bulk-form' class='space-y-4'>
+          <textarea id='targets' name='targets' rows='10' required
+            placeholder='8.8.8.8&#10;example.com&#10;AS15169'
+            class='w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 font-mono text-sm resize-y'></textarea>
+          {provider_strip}
+          <input type='hidden' name='route_mode' value='public' />
+          <div class='flex items-center gap-4'>
+            <button type='submit' class='px-4 py-2 rounded-lg font-semibold text-white bg-cyan-600 hover:bg-cyan-500'>
+              Run Bulk Triage
+            </button>
+            <span class='text-xs text-slate-500'>CSV columns: {html.escape(columns_preview)}</span>
+          </div>
+        </form>
+      </div>
+
+      <div id='progress-area' class='hidden mt-2'>
+        <p class='text-slate-300 mb-3 text-sm'>Processing indicators...</p>
+        <div class='bg-slate-900 rounded-lg h-3 overflow-hidden mb-2'>
+          <div id='progress-fill' class='bg-cyan-500 h-full transition-all duration-300' style='width:0%'></div>
+        </div>
+        <p id='progress-text' class='text-sm text-slate-400'>0 of 0 complete</p>
+      </div>
+
+      <div id='done-area' class='hidden mt-4'>
+        <div class='flex items-center gap-4'>
+          <span class='text-emerald-400 font-semibold'>&#10003; Complete</span>
+          <a id='download-link' href='#'
+            class='px-4 py-2 rounded-lg font-semibold text-white bg-emerald-600 hover:bg-emerald-500'>
+            Download CSV
+          </a>
+          <button id='new-batch-btn' type='button'
+            class='text-sm text-slate-400 hover:text-slate-100'>
+            New batch
+          </button>
+        </div>
+        <p id='error-msg' class='text-red-400 mt-2 hidden'></p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (function() {{
+      var form = document.getElementById('bulk-form');
+      var formArea = document.getElementById('form-area');
+      var progressArea = document.getElementById('progress-area');
+      var progressFill = document.getElementById('progress-fill');
+      var progressText = document.getElementById('progress-text');
+      var doneArea = document.getElementById('done-area');
+      var downloadLink = document.getElementById('download-link');
+      var errorMsg = document.getElementById('error-msg');
+      var newBatchBtn = document.getElementById('new-batch-btn');
+      var pollTimer = null;
+
+      newBatchBtn.addEventListener('click', function() {{
+        doneArea.classList.add('hidden');
+        errorMsg.classList.add('hidden');
+        formArea.classList.remove('hidden');
+        downloadLink.href = '#';
+      }});
+
+      form.addEventListener('submit', function(e) {{
+        e.preventDefault();
+        var data = new FormData(form);
+        formArea.classList.add('hidden');
+        progressArea.classList.remove('hidden');
+        doneArea.classList.add('hidden');
+
+        fetch('/bulk/start', {{method: 'POST', body: data}})
+          .then(function(r) {{ return r.json(); }})
+          .then(function(res) {{
+            if (res.error) {{
+              progressArea.classList.add('hidden');
+              formArea.classList.remove('hidden');
+              alert('Error: ' + res.error);
+              return;
+            }}
+            var jobId = res.job_id;
+            var count = res.count;
+            progressText.textContent = '0 of ' + count + ' complete';
+            pollTimer = setInterval(function() {{
+              fetch('/bulk/status/' + jobId)
+                .then(function(r) {{ return r.json(); }})
+                .then(function(s) {{
+                  if (s.total > 0) {{
+                    var pct = Math.round(s.completed / s.total * 100);
+                    progressFill.style.width = pct + '%';
+                    progressText.textContent = s.completed + ' of ' + s.total + ' complete';
+                  }}
+                  if (s.done) {{
+                    clearInterval(pollTimer);
+                    progressArea.classList.add('hidden');
+                    doneArea.classList.remove('hidden');
+                    if (s.error) {{
+                      errorMsg.textContent = 'Error: ' + s.error;
+                      errorMsg.classList.remove('hidden');
+                    }} else {{
+                      downloadLink.href = '/bulk/download/' + jobId;
+                    }}
+                  }}
+                }})
+                .catch(function() {{ clearInterval(pollTimer); }});
+            }}, 500);
+          }})
+          .catch(function(err) {{
+            clearInterval(pollTimer);
+            progressArea.classList.add('hidden');
+            formArea.classList.remove('hidden');
+            alert('Request failed: ' + err);
+          }});
+      }});
+    }})();
+  </script>
+</body>
+</html>""")
+
+    @app.post("/bulk/start", response_class=JSONResponse)
+    async def bulk_start(request: Request) -> JSONResponse:
+        ip = client_ip(request)
+        rate_limit_error = enforce_rate_limit(ip)
+        if rate_limit_error:
+            return JSONResponse({"error": rate_limit_error, "job_id": ""}, status_code=429)
+        if not internet_available(timeout=1.0):
+            return JSONResponse({"error": "internet connectivity check failed", "job_id": ""}, status_code=503)
+
+        form = await request.form()
+        targets_raw = str(form.get("targets", "")).strip()
+        targets = list(dict.fromkeys(t.strip() for t in targets_raw.splitlines() if t.strip()))
+
+        max_targets = 20 if training_mode else 50
+        if not targets:
+            return JSONResponse({"error": "no targets provided", "job_id": ""}, status_code=400)
+        if len(targets) > max_targets:
+            return JSONResponse(
+                {"error": f"maximum {max_targets} targets per bulk job", "job_id": ""},
+                status_code=400,
+            )
+
+        enrich_values = [str(v) for v in form.getlist("enrich")]
+        enrich_selection = "all-enabled" if training_mode else selection_to_csv(enrich_values)
+        session_username = getattr(request.state, "username", "") if server_mode else ""
+
+        job_id = uuid.uuid4().hex
+        with jobs_lock:
+            jobs[job_id] = {
+                "done": False,
+                "error": "",
+                "results": {},
+                "bulk": True,
+                "bulk_rows": [],
+                "bulk_targets": targets,
+                "bulk_completed": 0,
+                "bulk_total": len(targets),
+                "target": f"bulk:{len(targets)}",
+                "route_mode": "public",
+                "enrich_selection": enrich_selection,
+                "cached_at": 0,
+                "updated_at": time.time(),
+            }
+
+        def worker() -> None:
+            local_engine = StealthQueryEngine(
+                tor_engine,
+                QueryConfig(block_non_tor=False, route_mode="public"),
+            )
+            if server_mode and session_username:
+                user_keys = _auth_module.get_keys(session_username)
+                local_enrich = EnrichmentManager(key_overrides=user_keys) if user_keys else enrichment_manager
+            else:
+                local_enrich = enrichment_manager
+
+            def on_progress(done: int, total: int) -> None:
+                with jobs_lock:
+                    if job_id in jobs:
+                        jobs[job_id]["bulk_completed"] = done
+                        jobs[job_id]["updated_at"] = time.time()
+
+            try:
+                from bulk import bulk_query as _bulk_query
+                rows = _bulk_query(
+                    targets,
+                    local_engine,
+                    local_enrich,
+                    enrich_selection=enrich_selection,
+                    force_refresh=False,
+                    on_progress=on_progress,
+                )
+                with jobs_lock:
+                    if job_id in jobs:
+                        jobs[job_id]["bulk_rows"] = rows
+                        jobs[job_id]["done"] = True
+                        jobs[job_id]["updated_at"] = time.time()
+            except Exception as exc:
+                with jobs_lock:
+                    if job_id in jobs:
+                        jobs[job_id]["error"] = str(exc)
+                        jobs[job_id]["done"] = True
+                        jobs[job_id]["updated_at"] = time.time()
+
+        threading.Thread(target=worker, daemon=True).start()
+        return JSONResponse({"job_id": job_id, "count": len(targets)})
+
+    @app.get("/bulk/status/{job_id}", response_class=JSONResponse)
+    async def bulk_status(job_id: str) -> JSONResponse:
+        with jobs_lock:
+            job = jobs.get(job_id)
+        if not job:
+            return JSONResponse({"done": True, "error": "job not found"}, status_code=404)
+        return JSONResponse({
+            "done": bool(job.get("done")),
+            "completed": int(job.get("bulk_completed", 0)),
+            "total": int(job.get("bulk_total", 0)),
+            "error": str(job.get("error") or ""),
+        })
+
+    @app.get("/bulk/download/{job_id}")
+    async def bulk_download(job_id: str) -> Response:
+        with jobs_lock:
+            job = jobs.get(job_id)
+        if not job:
+            return JSONResponse({"error": "job not found"}, status_code=404)
+        if not job.get("done"):
+            return JSONResponse({"error": "job not yet complete"}, status_code=409)
+        if job.get("error"):
+            return JSONResponse({"error": job["error"]}, status_code=500)
+        rows = job.get("bulk_rows") or []
+        from bulk import write_csv_bytes as _write_csv_bytes
+        csv_bytes = _write_csv_bytes(rows)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"stealthops-bulk-{ts}.csv"
+        return Response(
+            content=csv_bytes,
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # ── End bulk triage ────────────────────────────────────────────────────────
 
     @app.post("/tor/manage", response_class=HTMLResponse)
     async def tor_manage(

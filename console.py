@@ -236,6 +236,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("    json <on|off>                  toggle JSON output")
             print("    headers <on|off>               toggle HTTP header inspection")
             print("    report [target] [path]         save PDF report (default: ~/Downloads)")
+            print("    bulk [file]                    triage indicators to CSV (paste or file, saved to ~/Downloads)")
             print("")
             print(f"  {_h('Routing')}")
             print("    mode <stealth|public>          switch routing mode")
@@ -680,6 +681,73 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 print(f"error: {exc}")
             except Exception as exc:
                 print(f"error generating report: {exc}")
+            print("")
+            continue
+
+        if cmd == "bulk":
+            if len(parts) == 2:
+                try:
+                    with open(parts[1], encoding="utf-8", errors="replace") as _f:
+                        raw_targets = [ln.strip() for ln in _f if ln.strip()]
+                except OSError as exc:
+                    print(f"error: cannot read file: {exc}")
+                    print("")
+                    continue
+            elif len(parts) == 1:
+                print("Enter indicators (one per line). Blank line when done:")
+                raw_targets = []
+                while True:
+                    try:
+                        _line = input("  ").strip()
+                    except EOFError:
+                        break
+                    if not _line:
+                        break
+                    raw_targets.append(_line)
+            else:
+                print("usage: bulk [file]")
+                print("")
+                continue
+
+            if not raw_targets:
+                print("no targets provided")
+                print("")
+                continue
+
+            seen: set[str] = set()
+            bulk_targets: list[str] = []
+            for _t in raw_targets:
+                if _t not in seen:
+                    seen.add(_t)
+                    bulk_targets.append(_t)
+
+            print(f"running bulk triage for {len(bulk_targets)} indicator(s)...")
+
+            def _bulk_progress(done: int, total: int) -> None:
+                sys.stderr.write(f"\r  [{done}/{total}] processing...")
+                sys.stderr.flush()
+
+            from bulk import bulk_query as _bulk_query, write_csv as _write_csv
+            from pathlib import Path as _Path
+
+            _bulk_rows = _bulk_query(
+                bulk_targets,
+                query_engine,
+                enrichment_manager,
+                enrich_selection=enrich_selection,
+                force_refresh=False,
+                on_progress=_bulk_progress,
+            )
+
+            sys.stderr.write("\r" + " " * 40 + "\r")
+            sys.stderr.flush()
+
+            _downloads = _Path.home() / "Downloads"
+            _downloads.mkdir(exist_ok=True)
+            _ts = _time_module.strftime("%Y%m%d-%H%M%S")
+            _csv_path = _downloads / f"stealthops-bulk-{_ts}.csv"
+            _write_csv(_bulk_rows, _csv_path)
+            print(f"saved: {_c(use_color, str(_csv_path), '92')}")
             print("")
             continue
 
