@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -238,7 +239,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("    json <on|off>                  toggle JSON output")
             print("    headers <on|off>               toggle HTTP header inspection")
             print("    report [target] [path]         save PDF report (default: ~/Downloads)")
-            print("    bulk [file]                    triage indicators to CSV (paste or file, saved to ~/Downloads)")
+            print("    bulk [target,target,...]       triage indicators to CSV — inline list, file path, or paste mode")
             print("")
             print(f"  {_h('Routing')}")
             print("    mode <stealth|public>          switch routing mode")
@@ -687,15 +688,20 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             continue
 
         if cmd == "bulk":
-            if len(parts) == 2:
-                try:
-                    with open(parts[1], encoding="utf-8", errors="replace") as _f:
-                        raw_targets = [ln.strip() for ln in _f if ln.strip()]
-                except OSError as exc:
-                    print(f"error: cannot read file: {exc}")
-                    print("")
-                    continue
-            elif len(parts) == 1:
+            if len(parts) >= 2:
+                # Single arg that is an existing file → read line by line
+                if len(parts) == 2 and os.path.isfile(parts[1]):
+                    try:
+                        with open(parts[1], encoding="utf-8", errors="replace") as _f:
+                            raw_targets = [ln.strip() for ln in _f if ln.strip()]
+                    except OSError as exc:
+                        print(f"error: cannot read file: {exc}")
+                        print("")
+                        continue
+                else:
+                    # Inline indicators — split on commas and/or whitespace
+                    raw_targets = [t for t in re.split(r"[,\s]+", " ".join(parts[1:])) if t]
+            else:
                 print("Enter indicators (one per line). Blank line when done:")
                 raw_targets = []
                 while True:
@@ -706,10 +712,6 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                     if not _line:
                         break
                     raw_targets.append(_line)
-            else:
-                print("usage: bulk [file]")
-                print("")
-                continue
 
             if not raw_targets:
                 print("no targets provided")

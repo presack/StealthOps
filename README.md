@@ -65,8 +65,9 @@ vt / shodan / cs / ab ...     run a single provider (uses last target if omitted
 providers                     provider status, keys, aliases, and session usage
 
 # Bulk triage
-bulk                          paste a list of indicators → triage CSV saved to ~/Downloads
-bulk /path/to/file.txt        read indicators from file → same CSV output
+bulk 8.8.8.8, example.com    inline list (comma or space separated)
+bulk /path/to/file.txt        read from file (one per line)
+bulk                          paste mode — type indicators, blank line to submit
 
 # Keys
 set-key                       interactive API key setup wizard
@@ -116,8 +117,9 @@ Submit a list of mixed indicators (IPs, domains, ASNs) and get a single CSV spre
 **Console:**
 
 ```
-bulk                  enter paste mode — type indicators one per line, blank line to submit
-bulk indicators.txt   read from file
+bulk 8.8.8.8, 1.1.1.1, example.com   inline list (comma or space separated)
+bulk indicators.txt                   read from file (one indicator per line)
+bulk                                  paste mode — type indicators, blank line to submit
 ```
 
 The CSV is saved to `~/Downloads/stealthops-bulk-YYYYMMDD-HHMMSS.csv`. The session's active enrichment selection is used (e.g. `enrich all` or a specific provider list).
