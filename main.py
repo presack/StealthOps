@@ -13,6 +13,7 @@ from formatter import _c, color_enabled, interactive_stdio
 from runner import execute_enrichment_only, execute_query
 from tor_engine import TorEngine
 from updater import check_for_update_background, cleanup_old_binary, do_update, get_update_notice
+from utils import refang
 from web_ui import build_app
 
 _SERVER_MODE  = bool(os.environ.get("SERVER_MODE"))
@@ -103,6 +104,7 @@ def run_cli(args: argparse.Namespace) -> int:
     target = args.query or args.target
     if not target:
         return 1
+    target = refang(target)
 
     route_mode = args.mode or "public"
     tor_engine = create_tor_engine(args, status_callback=lambda msg: print(f"[privacy] tor_runtime={msg}"))

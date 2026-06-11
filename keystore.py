@@ -26,12 +26,14 @@ WIZARD_ORDER = [
     "spur",
     "abuseipdb",
     "greynoise",
+    "otx",
     "dnsdumpster",
     "securitytrails",
 ]
 
 _TARGET_LABELS: dict[tuple[str, ...], str] = {
     ("ip", "domain", "url"): "IP · Domain · URL",
+    ("ip", "domain"): "IP · Domain",
     ("ip", "asn"): "IP · ASN",
     ("ip",): "IP",
     ("domain", "url"): "Domain · URL",

@@ -27,6 +27,7 @@ import time as _time_module
 
 from runner import execute_enrichment_only, execute_query
 from tor_engine import TorEngine
+from utils import refang
 
 
 def render_console_banner(
@@ -368,7 +369,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
 
         if cmd == "all":
             if len(parts) == 2:
-                target = parts[1]
+                target = refang(parts[1])
             elif len(parts) == 1 and last_target:
                 target = last_target
                 print(f"[notice] using last target: {target}")
@@ -446,7 +447,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 print("usage: query <target>")
                 print("")
                 continue
-            target = parts[1]
+            target = refang(parts[1])
             _cache_hit = _cache_module.get(target, "full")
             if _cache_hit is not None:
                 _cached_data, _cached_ts = _cache_hit
@@ -486,7 +487,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
         provider_cmd = PROVIDER_ALIASES.get(cmd)
         if provider_cmd:
             if len(parts) == 2:
-                target = parts[1]
+                target = refang(parts[1])
             elif len(parts) == 1 and last_target:
                 target = last_target
                 print(f"[notice] using last target: {target}")
@@ -717,6 +718,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             seen: set[str] = set()
             bulk_targets: list[str] = []
             for _t in raw_targets:
+                _t = refang(_t)
                 if _t not in seen:
                     seen.add(_t)
                     bulk_targets.append(_t)
@@ -751,7 +753,9 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             print("")
             continue
 
-        shorthand_target = raw
+        shorthand_target = refang(raw)
+        if shorthand_target != raw:
+            print(f"→ Refanged: {shorthand_target}")
         if shorthand_target:
             _cache_hit = _cache_module.get(shorthand_target, "full")
             if _cache_hit is not None:

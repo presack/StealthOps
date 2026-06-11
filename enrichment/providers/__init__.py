@@ -2,11 +2,14 @@
 
 from . import (
     abuseipdb,
+    bgpview,
     censys,
     dnsdb,
     dnsdumpster,
     greynoise,
+    ipinfo,
     mxtoolbox,
+    otx,
     ripestat,
     securitytrails,
     shodan,
@@ -19,11 +22,14 @@ from . import (
 
 __all__ = [
     "abuseipdb",
+    "bgpview",
     "censys",
     "dnsdb",
     "dnsdumpster",
     "greynoise",
+    "ipinfo",
     "mxtoolbox",
+    "otx",
     "ripestat",
     "securitytrails",
     "shodan",

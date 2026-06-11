@@ -9,11 +9,14 @@ from typing import Any
 
 from .providers import (
     abuseipdb,
+    bgpview,
     censys,
     dnsdb,
     dnsdumpster,
     greynoise,
+    ipinfo,
     mxtoolbox,
+    otx,
     ripestat,
     securitytrails,
     shodan,
@@ -33,13 +36,16 @@ _PROVIDER_ADAPTERS = {
     "viewdns": viewdns,
     "mxtoolbox": mxtoolbox,
     "abuseipdb": abuseipdb,
+    "ipinfo": ipinfo,
     "greynoise": greynoise,
+    "otx": otx,
     "dnsdumpster": dnsdumpster,
     "dnsdb": dnsdb,
     "urlscan": urlscan,
     "securitytrails": securitytrails,
     "spamhaus": spamhaus,
     "ripestat": ripestat,
+    "bgpview": bgpview,
 }
 
 
@@ -60,13 +66,16 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "viewdns": ProviderSpec("viewdns", "ViewDNS", ("VIEWDNS_API_KEY",), True, ("ip", "domain", "url")),
     "mxtoolbox": ProviderSpec("mxtoolbox", "MXToolbox", ("MXTOOLBOX_API_KEY",), True, ("ip", "domain", "url")),
     "abuseipdb": ProviderSpec("abuseipdb", "AbuseIPDB", ("ABUSEIPDB_API_KEY",), True, ("ip",)),
+    "ipinfo": ProviderSpec("ipinfo", "IPinfo", (), True, ("ip",)),
     "greynoise": ProviderSpec("greynoise", "GreyNoise", ("GREYNOISE_API_KEY",), True, ("ip", "asn")),
+    "otx": ProviderSpec("otx", "AlienVault OTX", ("ALIENVAULT_API_KEY",), True, ("ip", "domain")),
     "dnsdumpster": ProviderSpec("dnsdumpster", "DNSDumpster", ("DNSDUMPSTER_API_KEY",), True, ("domain", "url")),
     "dnsdb": ProviderSpec("dnsdb", "DNSDB", ("DNSDB_API_KEY",), True, ("ip", "domain", "url")),
     "urlscan": ProviderSpec("urlscan", "urlscan.io", ("URLSCAN_API_KEY",), True, ("ip", "domain", "url")),
     "securitytrails": ProviderSpec("securitytrails", "SecurityTrails", ("SECURITYTRAILS_API_KEY",), True, ("domain", "url")),
     "spamhaus": ProviderSpec("spamhaus", "Spamhaus ASN-DROP", (), True, ("asn",)),
     "ripestat": ProviderSpec("ripestat", "RIPEstat", (), True, ("asn",)),
+    "bgpview": ProviderSpec("bgpview", "BGPView", (), True, ("asn",)),
 }
 
 PROVIDER_ALIASES: dict[str, str] = {
@@ -95,6 +104,10 @@ PROVIDER_ALIASES: dict[str, str] = {
     "spamhaus": "spamhaus",
     "ripestat": "ripestat",
     "rs": "ripestat",
+    "ipinfo": "ipinfo",
+    "bgpview": "bgpview",
+    "bv": "bgpview",
+    "otx": "otx",
 }
 
 SELECTION_ALIAS_TOKENS = {"all-enabled"}

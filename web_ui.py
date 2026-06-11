@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from core_ops import QueryConfig, StealthQueryEngine, internet_available
 from enrichment import EnrichmentManager, PROVIDER_SPECS, parse_enrichment_selection, selection_to_csv
 from tor_engine import TorEngine
+from utils import refang
 
 
 TAILWIND_CDN = "https://cdn.tailwindcss.com"
@@ -1118,6 +1119,7 @@ def build_app(
         route_mode: str = Form("public"),
     ) -> HTMLResponse:
         form = await request.form()
+        target = refang(target.strip())
         enrich_all = str(form.get("enrich_all", "")).strip().lower() in {"1", "true", "on", "yes"}
         enrich_values = [str(v) for v in form.getlist("enrich")]
         enrich_selection = "all-enabled" if enrich_all else selection_to_csv(enrich_values)
@@ -1193,7 +1195,7 @@ def build_app(
                 status_code=503,
             )
         selected_mode = "stealth" if route_mode == "stealth" else "public"
-        target_value = target.strip()
+        target_value = refang(target.strip())
         force_refresh = str(form.get("force_refresh", "")).strip() == "1"
         session_username = getattr(request.state, "username", "") if server_mode else ""
         job_id = uuid.uuid4().hex
@@ -1644,7 +1646,7 @@ def build_app(
 
         form = await request.form()
         targets_raw = str(form.get("targets", "")).strip()
-        targets = list(dict.fromkeys(t.strip() for t in targets_raw.splitlines() if t.strip()))
+        targets = list(dict.fromkeys(refang(t.strip()) for t in targets_raw.splitlines() if t.strip()))
 
         max_targets = 20 if training_mode else 50
         if not targets:
@@ -1775,15 +1777,17 @@ def build_app(
     # Matches keystore.WIZARD_ORDER — keep in sync.
     _SETTINGS_PROVIDER_ORDER = [
         "virustotal", "viewdns", "mxtoolbox", "dnsdb", "urlscan",
-        "shodan", "censys", "spur", "abuseipdb", "greynoise",
+        "shodan", "censys", "spur", "abuseipdb", "greynoise", "otx",
         "dnsdumpster", "securitytrails",
     ]
 
     _TARGET_LABELS: dict[tuple[str, ...], str] = {
         ("ip", "domain", "url"): "IP · Domain · URL",
+        ("ip", "domain"): "IP · Domain",
         ("ip", "asn"): "IP · ASN",
         ("ip",): "IP",
         ("domain", "url"): "Domain · URL",
+        ("asn",): "ASN",
     }
 
     def _settings_target_label(provider: str) -> str:
