@@ -2,6 +2,26 @@
 
 ## Planned
 
+### Polish: Suppress empty WHOIS contact blocks
+
+**File:** `core_ops.py` (`_build_contact_block`)
+
+**Current behavior:** When a WHOIS record has no registrant/admin/tech contact data (common for registries like CentralNic that only return registrar-level fields), the output shows empty section headers:
+
+```
+Registrant:
+
+
+Administrative Contact:
+
+
+Technical Contact:
+```
+
+**Desired behavior:** Omit the section entirely when all fields are empty. If at least one field (name, org, street, city, state, country, phone, email) has a value, render the block as normal.
+
+**Fix:** In `_build_contact_block`, build `rendered` before appending the title line. Only return the block (title + fields) if `rendered` is non-empty. Return an empty list otherwise so the caller's `lines.extend()` adds nothing.
+
 ### Feature: `draw` command — link chart export to draw.io
 
 **Files:** `console.py`, new `draw.py`
