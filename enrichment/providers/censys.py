@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import requests
 
 from ._shared import ENRICHMENT_TIMEOUT_SECONDS, classify_target, short_http_error
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _read_org_id() -> str:
+    value = str(os.environ.get("CENSYS_ORGANIZATION_ID", "")).strip()
+    return value if _UUID_RE.match(value) else ""
 
 
 def run(target: str, credentials: str) -> dict[str, Any]:
@@ -15,7 +26,7 @@ def run(target: str, credentials: str) -> dict[str, Any]:
     if credentials.startswith("pat:"):
         token = credentials[len("pat:"):]
         if target_type == "asn":
-            organization_id = str(os.environ.get("CENSYS_ORGANIZATION_ID", "")).strip()
+            organization_id = _read_org_id()
             hits, query_used, error = _platform_asn_search(token, normalized, organization_id)
             if error:
                 legacy_hits = _legacy_asn_fallback(token, normalized)
@@ -95,6 +106,12 @@ def run(target: str, credentials: str) -> dict[str, Any]:
                 url,
                 headers={"accept": "application/vnd.censys.api.v3.host.v1+json", "authorization": f"Bearer {token}"},
                 params=params,
+                timeout=ENRICHMENT_TIMEOUT_SECONDS,
+            )
+        if response.status_code == 422 and params:
+            response = requests.get(
+                url,
+                headers={"accept": "application/vnd.censys.api.v3.host.v1+json", "authorization": token},
                 timeout=ENRICHMENT_TIMEOUT_SECONDS,
             )
         if response.status_code >= 400:
