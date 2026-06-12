@@ -387,7 +387,7 @@ class StealthQueryEngine:
         phone = cls._first_non_empty(contact, ["phone"]) or cls._first_non_empty(data, k("phone"))
         if not phone:
             phone = cls._raw_first_value(raw_whois, raw_labels(["Phone"]))
-        email = cls._first_non_empty(contact, ["email", "emails"]) or cls._first_non_empty(data, k("email") + k("emails"))
+        email = cls._first_non_empty(contact, ["email", "emails"]) or cls._first_non_empty(data, k("email"))
         if not email:
             email = cls._raw_first_value(raw_whois, raw_labels(["Email"]))
 
