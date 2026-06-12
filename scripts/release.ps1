@@ -113,9 +113,9 @@ $InstallLine
 
 **Install (Linux x86_64)**
 
-```bash
+``````bash
 $LinuxInstallLine
-```
+``````
 
 **Downloads**
 - ``stealthops-windows-x64.exe`` — Windows x64
