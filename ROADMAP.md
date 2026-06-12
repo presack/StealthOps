@@ -2,6 +2,32 @@
 
 ## Planned
 
+### Improvement: Bulk triage — fix blank ASN, N/A for inapplicable columns, domain network data
+
+**Files:** `bulk.py`, `bulk.py:TRIAGE_PRESET_PROVIDERS`
+
+Three related issues discovered while triaging IP indicators:
+
+**1. ASN blank for RIPE/APNIC/LACNIC IPs**
+
+`network_whois` (RDAP) often omits origin ASN for non-ARIN ranges. The ASN column stays blank even though ipinfo (already a free, no-key-required provider) returns `asn` (e.g. `"AS13335"`) for every IP.
+
+Fix:
+- Add `"ipinfo"` to `TRIAGE_PRESET_PROVIDERS` so it runs by default on bulk IP queries (no key required, negligible cost).
+- In `flatten_result` for IP targets, fall back to `ipinfo.get("asn")` when `nw.get("asn")` is empty. Also pull `org_name` from ipinfo as fallback for Organization when RDAP org is empty.
+
+**2. Domain-specific columns blank vs. "N/A" for IP targets**
+
+When the target is an IP, columns that require a domain registration (Registrar, Created, Expires, Domain Status, Nameservers, MX Hosts) are structurally impossible to populate — they're not just empty, they don't apply. Blank is ambiguous; "N/A" communicates intent and makes it easier to spot genuinely missing data vs. intentionally skipped fields.
+
+Fix: in `flatten_result`, set those six columns to `"N/A"` for IP targets, and set CIDR/ASN to `"N/A"` for domain targets only if `network_whois` also returned nothing (i.e. couldn't resolve an IP).
+
+**3. Domain rows missing ASN/Org/Country/CIDR**
+
+`flatten_result` only pulls `network_whois` fields (ASN, Organization, Country, CIDR) for `target_type == "ip"`. But `run_all` also runs `network_whois_lookup` for domain targets via their resolved A record — the data is already in the result dict. Domain rows should populate those columns the same way IP rows do.
+
+Fix: move the `nw` field extraction (ASN, Organization, Country, CIDR) outside the `if target_type == "ip"` block so it applies to all target types, then let the N/A logic above handle the columns that truly don't apply.
+
 ### Polish: Suppress empty WHOIS contact blocks
 
 **File:** `core_ops.py` (`_build_contact_block`)
