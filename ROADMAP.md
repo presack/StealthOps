@@ -2,6 +2,32 @@
 
 ## Planned
 
+### Feature: ASN query support in core pipeline
+
+**Files:** `core_ops.py` (`run_all_staged`, new `asn_rdap_lookup`), `formatter.py` (`format_cli_report`)
+
+**Problem:** Querying an ASN directly (`36963` or `AS36963`) falls into the domain branch of `run_all_staged` because there is no ASN-aware code path in the core engine. The result is a wall of DNS/WHOIS/MX errors. Enrichment providers handle ASNs correctly (they call `classify_target` from `_shared.py`) but the core query never gets that far.
+
+**Fix — core_ops.py:**
+
+1. At the start of `run_all_staged`, call `normalize_asn(lookup_target)` (import from `enrichment.providers._shared`). If it returns a value, take an ASN-specific code path: skip DNS/WHOIS/MX/headers, run `asn_rdap_lookup(asn)`, and return a result dict shaped like `{"asn_query": asn, "asn_rdap": <rdap_data>}`.
+
+2. New method `asn_rdap_lookup(asn: str) -> dict`: query RDAP bootstrap for the ASN:
+   - `https://rdap.org/autnum/{asn}` (bootstraps to correct RIR)
+   - Parse name, type, handle, country, events (registration/expiry dates), entities (org, abuse contact).
+   - Return structured dict with keys: `asn`, `name`, `type`, `handle`, `country`, `org_name`, `abuse_email`, `creation_date`, `updated_date`, `rdap_url`.
+
+**Fix — formatter.py:**
+
+`format_cli_report` checks for `"asn_query"` key. If present, renders a focused ASN report:
+- `=== ASN LOOKUP === [source: RDAP autnum]` with the structured RDAP fields
+- `=== ENRICHMENT ===` if enrichment ran
+- Omits ADDRESS LOOKUP / DNS / WHOIS / MX / NS / TXT / HTTP sections entirely (no misleading errors)
+
+**`_normalize_lookup_target`:** strip leading `AS`/`as` before returning for ASN targets so the display target stays readable but routing is unambiguous.
+
+**Console UX:** both `36963` and `AS36963` should work identically; `classify_target` already normalizes both forms.
+
 ### Improvement: Bulk triage — fix blank ASN, N/A for inapplicable columns, domain network data
 
 **Files:** `bulk.py`, `bulk.py:TRIAGE_PRESET_PROVIDERS`

@@ -140,6 +140,19 @@ class StealthQueryEngine:
             return False
 
     @staticmethod
+    def _as_asn_num(value: str) -> str | None:
+        """Return bare ASN number string if value is an ASN ('36963' or 'AS36963'), else None."""
+        text = value.strip().upper()
+        if text.startswith("AS"):
+            text = text[2:].strip()
+        if not text.isdigit():
+            return None
+        number = int(text)
+        if number <= 0 or number > 4294967295:
+            return None
+        return text
+
+    @staticmethod
     def _empty_dns_payload(name: str) -> dict[str, Any]:
         return {
             "domain": name,
@@ -1202,6 +1215,156 @@ class StealthQueryEngine:
         self._network_whois_cache[ip_value] = (datetime.utcnow().timestamp(), dict(result))
         return result
 
+    @staticmethod
+    def _format_asn_rdap_record(payload: dict[str, Any], source_url: str) -> str:
+        lines: list[str] = [f"Source: {source_url}", ""]
+
+        def add(label: str, key: str) -> None:
+            value = payload.get(key)
+            if value not in (None, ""):
+                lines.append(f"{label}: {value}")
+
+        add("Handle", "handle")
+        add("Name", "name")
+        add("Type", "type")
+        add("Country", "country")
+
+        start = payload.get("startAutnum")
+        end = payload.get("endAutnum")
+        if start is not None and end is not None and int(start) != int(end):
+            lines.append(f"Autnum Range: {start}-{end}")
+
+        events = payload.get("events", [])
+        if isinstance(events, list) and events:
+            lines.append("")
+            lines.append("Events:")
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                action = event.get("eventAction", "event")
+                date = event.get("eventDate", "")
+                lines.append(f"- {action}: {date}")
+
+        entities = payload.get("entities", [])
+        if isinstance(entities, list) and entities:
+            lines.append("")
+            lines.append("Entities:")
+            for entity in entities:
+                if not isinstance(entity, dict):
+                    continue
+                handle = str(entity.get("handle", "")).strip() or "-"
+                roles = ", ".join(str(r) for r in entity.get("roles", []) if r) or "-"
+                name = (
+                    StealthQueryEngine._extract_vcard_field(entity, "fn")
+                    or StealthQueryEngine._extract_vcard_field(entity, "org")
+                    or "-"
+                )
+                email = StealthQueryEngine._extract_vcard_field(entity, "email") or "-"
+                phone = StealthQueryEngine._extract_vcard_field(entity, "tel") or "-"
+                lines.append(f"- Handle: {handle}")
+                lines.append(f"  Name: {name}")
+                lines.append(f"  Roles: {roles}")
+                lines.append(f"  Email: {email}")
+                lines.append(f"  Phone: {phone}")
+
+        return "\n".join(lines).strip()
+
+    def asn_rdap_lookup(self, asn: str) -> dict[str, Any]:
+        urls = [
+            f"https://rdap.org/autnum/{asn}",
+            f"https://rdap.arin.net/registry/autnum/{asn}",
+        ]
+        payload: dict[str, Any] | None = None
+        used_url = ""
+        errors: list[str] = []
+
+        for url in urls:
+            try:
+                response = requests.get(
+                    url,
+                    headers={"accept": "application/rdap+json, application/json"},
+                    timeout=RDAP_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                used_url = url
+                break
+            except Exception as exc:
+                err = self._short_error(exc)
+                if err and err not in errors:
+                    errors.append(err)
+
+        if payload is None:
+            return {
+                "asn": asn,
+                "asn_rdap_error": "; ".join(errors) if errors else "RDAP lookup failed",
+            }
+
+        result: dict[str, Any] = {"asn": asn, "rdap_url": used_url}
+
+        for src, dst in (
+            ("name", "name"),
+            ("type", "type"),
+            ("handle", "handle"),
+            ("country", "country"),
+        ):
+            value = payload.get(src)
+            if value:
+                result[dst] = str(value)
+
+        start = payload.get("startAutnum")
+        end = payload.get("endAutnum")
+        if start is not None and end is not None and int(start) != int(end):
+            result["autnum_range"] = f"{start}-{end}"
+
+        creation = self._domain_rdap_event_date(payload, ("registration", "registered", "create"))
+        updated = self._domain_rdap_event_date(payload, ("last changed", "last update", "update"))
+        if creation:
+            result["creation_date"] = creation
+        if updated:
+            result["updated_date"] = updated
+
+        entities = payload.get("entities", [])
+        if isinstance(entities, list):
+            # First pass: registrant role gets priority for org_name.
+            for entity in entities:
+                if not isinstance(entity, dict):
+                    continue
+                roles = [str(r).lower() for r in entity.get("roles", [])]
+                if "registrant" not in roles:
+                    continue
+                org_name = (
+                    self._extract_vcard_field(entity, "fn")
+                    or self._extract_vcard_field(entity, "org")
+                    or entity.get("handle")
+                )
+                if org_name:
+                    result["org_name"] = str(org_name)
+                    break
+            # Second pass: abuse contact + fallback org_name.
+            for entity in entities:
+                if not isinstance(entity, dict):
+                    continue
+                roles = [str(r).lower() for r in entity.get("roles", [])]
+                email = self._extract_vcard_field(entity, "email")
+                phone = self._extract_vcard_field(entity, "tel")
+                if "abuse" in roles:
+                    if email:
+                        result["abuse_email"] = str(email)
+                    if phone:
+                        result["abuse_phone"] = str(phone)
+                if not result.get("org_name"):
+                    org_name = (
+                        self._extract_vcard_field(entity, "fn")
+                        or self._extract_vcard_field(entity, "org")
+                        or entity.get("handle")
+                    )
+                    if org_name:
+                        result["org_name"] = str(org_name)
+
+        result["asn_rdap_record"] = self._format_asn_rdap_record(payload, used_url)
+        return result
+
     def header_inspect(self, url: str) -> dict[str, Any]:
         target = url if url.startswith(("http://", "https://")) else f"https://{url}"
         proxies = self._proxies()
@@ -1305,6 +1468,23 @@ class StealthQueryEngine:
         lookup_target = self._normalize_lookup_target(target)
         is_ip = self._is_ip(lookup_target)
         out: dict[str, Any] = {}
+
+        # ASN targets skip DNS/WHOIS/MX/headers — only RDAP autnum lookup applies.
+        asn_num = self._as_asn_num(lookup_target)
+        if asn_num:
+            asn_data = self.asn_rdap_lookup(asn_num)
+            final: dict[str, Any] = {
+                "asn_query": asn_num,
+                "asn_rdap": asn_data,
+                "address": {"query": target, "canonical_name": "", "aliases": [], "addresses": []},
+                "dns": self._empty_dns_payload(target),
+                "mx": {"domain": target, "mx": []},
+                "whois": {"whois_error": "not applicable for ASN targets"},
+                "network_whois": {},
+                "headers": {"url": target, "skipped": True},
+            }
+            emit(final)
+            return final
 
         # Short-circuit special-purpose IPs before resolver/WHOIS work.
         if is_ip:

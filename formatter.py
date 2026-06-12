@@ -135,6 +135,46 @@ def format_cli_report(result: dict, full: bool = False) -> str:
     headers_data = result.get("headers", {})
     enrichment_data = result.get("enrichment", {})
 
+    if result.get("asn_query"):
+        asn_num = result.get("asn_query", "")
+        asn_rdap = result.get("asn_rdap", {})
+        asn_lines: list[str] = []
+        asn_lines.append(f"=== ASN LOOKUP ===  [source: RDAP autnum/{asn_num}]")
+        for field, label in (
+            ("handle", "Handle"),
+            ("name", "Name"),
+            ("org_name", "Organization"),
+            ("type", "Type"),
+            ("country", "Country"),
+            ("autnum_range", "Autnum Range"),
+            ("creation_date", "Registered"),
+            ("updated_date", "Last Updated"),
+            ("abuse_email", "Abuse Email"),
+            ("abuse_phone", "Abuse Phone"),
+            ("rdap_url", "RDAP Source"),
+        ):
+            value = asn_rdap.get(field)
+            if value not in (None, ""):
+                asn_lines.append(f"{label}: {value}")
+        if asn_rdap.get("asn_rdap_error"):
+            asn_lines.append(f"error: {asn_rdap['asn_rdap_error']}")
+        rdap_record = str(asn_rdap.get("asn_rdap_record", "")).strip()
+        if rdap_record:
+            asn_lines.append("")
+            asn_lines.append("=== ASN RDAP RECORD ===")
+            asn_lines.extend(rdap_record.splitlines())
+        if enrichment_data.get("enabled"):
+            asn_lines.append("")
+            enrich_block = format_enrichment_report(dict(enrichment_data), full=full).splitlines()
+            if enrich_block:
+                enrich_block[0] = "=== ENRICHMENT ===  [source: optional provider APIs]"
+            asn_lines.extend(enrich_block)
+            consensus_lines = build_enrichment_consensus(enrichment_data)
+            if consensus_lines:
+                asn_lines.append("")
+                asn_lines.extend(consensus_lines)
+        return "\n".join(asn_lines)
+
     lines: list[str] = []
     lines.append("=== ADDRESS LOOKUP ===  [source: resolver + DNS records]")
     for field in ["query", "canonical_name", "derived_domain", "aliases", "addresses", "address_lookup_error"]:
