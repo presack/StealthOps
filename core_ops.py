@@ -600,22 +600,25 @@ class StealthQueryEngine:
         domain: str,
         on_retry: Callable[[int, int, str], None] | None = None,
     ) -> dict[str, Any]:
-        # Prefer RDAP (HTTPS) for cloud reliability; fall back to classic WHOIS (port 43).
+        # Try RDAP first for structural data (cloud-reliable, HTTPS).  Then always
+        # attempt port-43 WHOIS regardless, because RDAP omits registrant/admin/tech
+        # contact fields under GDPR redaction while the raw WHOIS response often
+        # retains org name, state, and country.  When RDAP already succeeded, skip
+        # retries on port-43 so a blocked firewall rule fails fast.
         whois_domain = self._guess_domain_from_host(domain) if domain and not self._is_ip(domain) else domain
         rdap_first = self._domain_rdap_lookup(whois_domain)
-        if rdap_first:
-            return rdap_first
 
         # python-whois does not support SOCKS directly; this remains best-effort.
+        max_attempts = 1 if rdap_first else WHOIS_RETRY_MAX_ATTEMPTS
         data = None
         last_exc: Exception | None = None
-        for attempt in range(1, WHOIS_RETRY_MAX_ATTEMPTS + 1):
+        for attempt in range(1, max_attempts + 1):
             try:
                 data = whois.whois(whois_domain, timeout=WHOIS_TIMEOUT_SECONDS)
                 break
             except Exception as exc:
                 last_exc = exc
-                if attempt >= WHOIS_RETRY_MAX_ATTEMPTS or not self._is_transient_whois_error(exc):
+                if attempt >= max_attempts or not self._is_transient_whois_error(exc):
                     break
                 if on_retry:
                     try:
@@ -631,6 +634,8 @@ class StealthQueryEngine:
                     pass
 
         if data is None:
+            if rdap_first:
+                return rdap_first
             rdap_fallback = self._domain_rdap_lookup(whois_domain)
             if rdap_fallback:
                 return rdap_fallback
@@ -674,7 +679,7 @@ class StealthQueryEngine:
         normalized["domain_whois_record"] = self._build_domain_whois_record(normalized, whois_domain)
         normalized["domain"] = whois_domain
 
-        # If classic WHOIS returned essentially empty data, retry RDAP fallback.
+        # If classic WHOIS returned essentially empty data, use RDAP as fallback.
         has_material = bool(
             str(normalized.get("domain_whois_record", "")).strip()
             or normalized.get("domain_name")
@@ -682,7 +687,7 @@ class StealthQueryEngine:
             or normalized.get("status")
         )
         if not has_material:
-            rdap_fallback = self._domain_rdap_lookup(whois_domain)
+            rdap_fallback = rdap_first or self._domain_rdap_lookup(whois_domain)
             if rdap_fallback:
                 return rdap_fallback
         return normalized

@@ -5,6 +5,7 @@ WORKDIR /app
 # gcc is needed to compile some pip packages on certain architectures
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    tor \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

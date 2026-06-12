@@ -867,7 +867,7 @@ def build_app(
                 + "</div>"
             )
 
-        if training_mode or server_mode:
+        if training_mode:
             _hdr_badge = "<div class='px-4 py-2 rounded-full bg-cyan-600 text-white text-sm font-semibold'>Public Mode</div>"
             _hdr_toggle = ""
             _form_route = ""
@@ -1092,7 +1092,7 @@ def build_app(
 
     @app.post("/mode", response_class=HTMLResponse)
     async def set_mode(route_mode: str = Form("public")) -> HTMLResponse:
-        if training_mode or server_mode:
+        if training_mode:
             return HTMLResponse(render_page(route_mode="public"))
         selected = "stealth" if route_mode == "stealth" else "public"
         query_engine.config.route_mode = selected

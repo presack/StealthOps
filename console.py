@@ -465,6 +465,11 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             _cache_hit = _cache_module.get(target, "full")
             if _cache_hit is not None:
                 _cached_data, _cached_ts = _cache_hit
+                if include_headers and _cached_data.get("headers", {}).get("skipped"):
+                    _headers_result = query_engine.header_inspect(target)
+                    _cached_data = dict(_cached_data)
+                    _cached_data["headers"] = _headers_result
+                    _cache_module.put(target, "full", _cached_data)
                 if emit_json:
                     import json as _json
                     print(_json.dumps(_cached_data, indent=2))
@@ -477,7 +482,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 last_target = target
                 session_history.pop(target, None)
                 session_history[target] = _cached_data
-                if len(session_history) > 10:
+                if len(session_history) > 50:
                     del session_history[next(iter(session_history))]
                 print("")
                 continue
@@ -495,7 +500,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 _cache_module.put(target, "full", _result)
                 session_history.pop(target, None)
                 session_history[target] = _result
-                if len(session_history) > 10:
+                if len(session_history) > 50:
                     del session_history[next(iter(session_history))]
             elif rc == 0:
                 last_target = target
@@ -799,6 +804,11 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
             _cache_hit = _cache_module.get(shorthand_target, "full")
             if _cache_hit is not None:
                 _cached_data, _cached_ts = _cache_hit
+                if include_headers and _cached_data.get("headers", {}).get("skipped"):
+                    _headers_result = query_engine.header_inspect(shorthand_target)
+                    _cached_data = dict(_cached_data)
+                    _cached_data["headers"] = _headers_result
+                    _cache_module.put(shorthand_target, "full", _cached_data)
                 if emit_json:
                     import json as _json
                     print(_json.dumps(_cached_data, indent=2))
@@ -811,7 +821,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 last_target = shorthand_target
                 session_history.pop(shorthand_target, None)
                 session_history[shorthand_target] = _cached_data
-                if len(session_history) > 10:
+                if len(session_history) > 50:
                     del session_history[next(iter(session_history))]
                 print("")
                 continue
@@ -829,7 +839,7 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 _cache_module.put(shorthand_target, "full", _result)
                 session_history.pop(shorthand_target, None)
                 session_history[shorthand_target] = _result
-                if len(session_history) > 10:
+                if len(session_history) > 50:
                     del session_history[next(iter(session_history))]
             elif rc == 0:
                 last_target = shorthand_target

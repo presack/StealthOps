@@ -300,7 +300,7 @@ class TorEngine:
             else:
                 self.last_error = None
             return is_tor
-        except Exception as exc:  # pragma: no cover - network dependent
+        except (Exception, KeyboardInterrupt) as exc:  # pragma: no cover - network dependent
             self.last_error = f"tor circuit verification failed: {exc}"
             return False
 
