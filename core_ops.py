@@ -1026,6 +1026,7 @@ class StealthQueryEngine:
         add("End Address", "endAddress")
         add("IP Version", "ipVersion")
         add("ASN", "asn")
+        add("ASN Organization", "asn_org")
         add("Type", "type")
         add("Country", "country")
         add("Parent Handle", "parentHandle")
@@ -1286,6 +1287,12 @@ class StealthQueryEngine:
             whois_extra = self._ip_whois_fallback(ip_value)
             if whois_extra.get("asn"):
                 asn = whois_extra["asn"]
+                try:
+                    asn_rdap = self.asn_rdap_lookup(asn)
+                    if asn_rdap.get("org_name"):
+                        result["asn_org"] = asn_rdap["org_name"]
+                except Exception:
+                    pass
 
         if asn:
             result["asn"] = asn
@@ -1296,6 +1303,8 @@ class StealthQueryEngine:
         payload_for_render = dict(payload)
         if asn:
             payload_for_render["asn"] = asn
+        if result.get("asn_org"):
+            payload_for_render["asn_org"] = result["asn_org"]
         result["network_whois_record"] = self._format_network_whois_record(payload_for_render, used_url or "unknown")
         for src_key, dst_key in (
             ("name", "net_name"),

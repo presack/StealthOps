@@ -224,6 +224,8 @@ def format_cli_report(result: dict, full: bool = False) -> str:
     else:
         fallback = asn_reason or "unavailable (origin ASN was not returned by the RDAP response)"
         lines.append(f"ASN: {fallback}")
+    if network_whois_data.get("asn_org"):
+        lines.append(f"ASN Organization: {network_whois_data['asn_org']}")
     for field in [
         "ip", "organization", "net_name", "cidr", "start_address", "end_address",
         "country", "ip_version", "net_type", "abuse_email", "abuse_phone", "rdap_url",
