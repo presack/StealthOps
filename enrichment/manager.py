@@ -145,7 +145,10 @@ class EnrichmentManager:
         if key_overrides:
             for provider, raw_key in key_overrides.items():
                 if provider in PROVIDER_SPECS and str(raw_key).strip():
-                    self._keys[provider] = self._split_env_values(raw_key)
+                    if provider == "censys":
+                        self._keys[provider] = [f"pat:{v}" for v in self._split_env_values(raw_key)]
+                    else:
+                        self._keys[provider] = self._split_env_values(raw_key)
         self._usage_lock = threading.Lock()
         self._usage: dict[str, dict[str, int]] = {
             name: {"attempts": 0, "success": 0, "errors": 0}
