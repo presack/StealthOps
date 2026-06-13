@@ -2,6 +2,38 @@
 
 ## Planned
 
+### Polish: Drop `uuid` column from urlscan recent_scans table (web UI)
+
+**File:** `web_ui.py` (`provider_specific` dict, `render_dict_list_table`)
+
+The `uuid` column in the urlscan enrichment table is redundant — `result_url` already links directly to the scan (the URL path embeds the UUID). The column consumes space without adding value visible to the analyst.
+
+**Fix:** Remove `"uuid"` from the `("urlscan", "recent_scans")` column list in `provider_specific`:
+
+```python
+("urlscan", "recent_scans"): ["time", "domain", "ip", "score", "result_url"],
+```
+
+This brings the table to 5 columns, giving the remaining columns more breathing room. The `uuid` field remains in the raw payload (not removed from `urlscan.py`) in case it is useful in the future or accessed programmatically.
+
+---
+
+### Polish: Prompt to restart after self-update
+
+**Files:** `console.py` (update command handler), `updater.py` (`do_update`)
+
+After `do_update()` succeeds in the console, prompt the user before restarting:
+
+```
+Update applied — restart now to use v1.1.12? [y/N]
+```
+
+If yes: `os.execv(sys.executable, sys.argv)` re-execs the new binary in-place.
+
+**What survives a restart:** SQLite query cache (6h TTL), API keys (`keys.env`). **What resets:** in-memory console state (`enrich` mode, `stealth`/`public` mode, `json on/off`, session history for `last`/`reload`) — all reset to safe defaults, acceptable.
+
+Don't auto-restart without the prompt. The current `update` flow already has one confirmation step (user types `update`); silently re-executing a freshly downloaded binary after that crosses a trust line. The prompt is two characters of friction and keeps the user in control.
+
 ### Feature: ASN query support in core pipeline
 
 **Files:** `core_ops.py` (`run_all_staged`, new `asn_rdap_lookup`), `formatter.py` (`format_cli_report`)

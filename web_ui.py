@@ -433,6 +433,7 @@ def build_app(
                 if not columns:
                     return "<span class='text-slate-500'>-</span>"
 
+                _nowrap_cols = {"ip", "time", "date", "lastseen", "score", "country", "asn", "priority", "port", "protocol"}
                 body_rows = []
                 for i, item in enumerate(dict_list):
                     extra = " xmore hidden" if i >= cap else ""
@@ -449,7 +450,8 @@ def build_app(
                                 cell = html.escape(str(raw))
                         else:
                             cell = html.escape(str(raw))
-                        cells.append(f"<td class='py-1 align-top break-all'>{cell}</td>")
+                        cell_class = "py-1 align-top whitespace-nowrap" if col in _nowrap_cols else "py-1 align-top break-all"
+                        cells.append(f"<td class='{cell_class}'>{cell}</td>")
                     body_rows.append(f"<tr class='{extra.strip()}'>" + "".join(cells) + "</tr>")
 
                 more_count = len(dict_list) - cap
