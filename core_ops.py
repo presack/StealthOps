@@ -692,6 +692,16 @@ class StealthQueryEngine:
         normalized["domain_whois_record"] = self._build_domain_whois_record(normalized, whois_domain)
         normalized["domain"] = whois_domain
 
+        # Backfill structural fields that RDAP has but port-43 WHOIS omitted.
+        # python-whois often returns a non-empty object (domain_name is enough to
+        # pass the has_material check below) while leaving dates/status/registrar
+        # empty — particularly for privacy-protected or non-ARIN registries.
+        if rdap_first:
+            for field in ("creation_date", "updated_date", "expiration_date", "status", "name_servers", "registrar"):
+                if not normalized.get(field) and rdap_first.get(field):
+                    normalized[field] = rdap_first[field]
+            normalized["domain_whois_record"] = self._build_domain_whois_record(normalized, whois_domain)
+
         # If classic WHOIS returned essentially empty data, use RDAP as fallback.
         has_material = bool(
             str(normalized.get("domain_whois_record", "")).strip()
