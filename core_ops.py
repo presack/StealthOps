@@ -911,6 +911,57 @@ class StealthQueryEngine:
         return None
 
     @classmethod
+    def _ip_whois_fallback(cls, ip: str) -> dict[str, Any]:
+        """Port-43 WHOIS for IPs: RIPE/AFRINIC/APNIC/LACNIC RDAP omits route objects,
+        so the ASN (origin:) and network description (descr:) only appear in WHOIS."""
+        try:
+            import whois as _whois
+            data = _whois.whois(ip, timeout=WHOIS_TIMEOUT_SECONDS)
+        except Exception:
+            return {}
+
+        raw_chunks: list[str] = []
+        if hasattr(data, "get"):
+            raw_val = data.get("raw")
+            if isinstance(raw_val, list):
+                raw_chunks.extend(str(v) for v in raw_val if v)
+            elif raw_val:
+                raw_chunks.append(str(raw_val))
+        text_val = getattr(data, "text", None)
+        if text_val:
+            raw_chunks.append(str(text_val))
+        raw_text = "\n".join(raw_chunks).strip()
+        if not raw_text:
+            return {}
+
+        out: dict[str, Any] = {}
+        for line in raw_text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("%") or line.startswith("#"):
+                continue
+            if ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            key = key.strip().lower()
+            value = value.strip()
+            if not value:
+                continue
+            if key == "origin" and "asn" not in out:
+                stripped = value.upper()
+                if stripped.startswith("AS"):
+                    stripped = stripped[2:]
+                if stripped.isdigit():
+                    out["asn"] = stripped
+            if key == "descr" and "descr" not in out:
+                out["descr"] = value
+            if key == "orgname" and "org_name" not in out:
+                out["org_name"] = value
+            if key in ("abuse-mailbox", "orgabuseemail") and "abuse_email" not in out:
+                if "@" in value:
+                    out["abuse_email"] = value
+        return out
+
+    @classmethod
     def _vcard_contact(cls, entity: dict[str, Any]) -> dict[str, str]:
         out: dict[str, str] = {}
         vcard = entity.get("vcardArray")
@@ -1230,6 +1281,12 @@ class StealthQueryEngine:
             return result
 
         asn = self._extract_asn(payload)
+        whois_extra: dict[str, Any] = {}
+        if not asn:
+            whois_extra = self._ip_whois_fallback(ip_value)
+            if whois_extra.get("asn"):
+                asn = whois_extra["asn"]
+
         if asn:
             result["asn"] = asn
         else:
@@ -1291,10 +1348,18 @@ class StealthQueryEngine:
                         abuse_email = str(email)
                     if phone:
                         abuse_phone = str(phone)
-            if chosen_org:
+            # For non-ARIN RIRs the RDAP entity is often a contact person rather
+            # than the network org. If port-43 WHOIS provided a descr (network
+            # description from the inetnum block), prefer it as the org name.
+            whois_org = whois_extra.get("descr") or whois_extra.get("org_name")
+            if whois_org:
+                result["organization"] = whois_org
+            elif chosen_org:
                 result["organization"] = chosen_org
             if abuse_email:
                 result["abuse_email"] = abuse_email
+            elif whois_extra.get("abuse_email"):
+                result["abuse_email"] = whois_extra["abuse_email"]
             if abuse_phone:
                 result["abuse_phone"] = abuse_phone
 
