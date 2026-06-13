@@ -404,7 +404,6 @@ class StealthQueryEngine:
         if not email:
             email = cls._raw_first_value(raw_whois, raw_labels(["Email"]))
 
-        lines: list[str] = [f"{title}:"]
         rendered = []
         for part in (name, org, street):
             if part:
@@ -427,10 +426,10 @@ class StealthQueryEngine:
                 rendered.append(part)
 
         if not rendered:
-            lines.append("\t")
-        else:
-            for part in rendered:
-                lines.append(f"\t{part}")
+            return []
+        lines: list[str] = [f"{title}:"]
+        for part in rendered:
+            lines.append(f"\t{part}")
         lines.append("")
         return lines
 
@@ -697,7 +696,7 @@ class StealthQueryEngine:
         # pass the has_material check below) while leaving dates/status/registrar
         # empty — particularly for privacy-protected or non-ARIN registries.
         if rdap_first:
-            for field in ("creation_date", "updated_date", "expiration_date", "status", "name_servers", "registrar"):
+            for field in ("creation_date", "updated_date", "expiration_date", "status", "name_servers", "registrar", "contacts"):
                 if not normalized.get(field) and rdap_first.get(field):
                     normalized[field] = rdap_first[field]
             normalized["domain_whois_record"] = self._build_domain_whois_record(normalized, whois_domain)
@@ -789,6 +788,40 @@ class StealthQueryEngine:
         if registrar:
             normalized["registrar"] = registrar
 
+        # Follow registrar RDAP link to get registrant/admin/tech entity data.
+        # Registry RDAP omits these; the registrar RDAP carries them (even when
+        # the registrant is a privacy proxy, that data is still useful to show).
+        registrar_rdap_url = ""
+        for link in payload.get("links", []):
+            if isinstance(link, dict) and str(link.get("rel", "")).lower() == "related":
+                href = str(link.get("href", "")).strip()
+                if href.startswith("https://"):
+                    registrar_rdap_url = href
+                    break
+        if registrar_rdap_url:
+            try:
+                r2 = requests.get(
+                    registrar_rdap_url,
+                    headers={"accept": "application/rdap+json, application/json"},
+                    timeout=RDAP_DOMAIN_TIMEOUT_SECONDS,
+                )
+                if r2.status_code < 400:
+                    reg_payload = r2.json()
+                    contacts: dict[str, dict[str, str]] = {}
+                    for entity in reg_payload.get("entities", []):
+                        if not isinstance(entity, dict):
+                            continue
+                        roles = [str(r).lower() for r in entity.get("roles", [])]
+                        for role_key in ("registrant", "administrative", "technical"):
+                            if role_key in roles and role_key not in contacts:
+                                contact_data = cls._vcard_contact(entity)
+                                if contact_data:
+                                    contacts[role_key] = contact_data
+                    if contacts:
+                        normalized["contacts"] = contacts
+            except Exception:
+                pass
+
         normalized["domain_whois_record"] = cls._build_domain_whois_record(normalized, domain)
         return normalized
 
@@ -868,6 +901,41 @@ class StealthQueryEngine:
                 except ValueError:
                     continue
         return None
+
+    @classmethod
+    def _vcard_contact(cls, entity: dict[str, Any]) -> dict[str, str]:
+        out: dict[str, str] = {}
+        vcard = entity.get("vcardArray")
+        if not isinstance(vcard, list) or len(vcard) < 2 or not isinstance(vcard[1], list):
+            return out
+        for item in vcard[1]:
+            if not isinstance(item, list) or len(item) < 4:
+                continue
+            field = str(item[0]).lower()
+            value = item[3]
+            if field == "fn" and not out.get("name"):
+                out["name"] = str(value).strip()
+            elif field == "org" and not out.get("organization"):
+                out["organization"] = str(value).strip()
+            elif field in ("tel", "phone") and not out.get("phone"):
+                val = str(value).strip()
+                out["phone"] = val[4:] if val.startswith("tel:") else val
+            elif field == "email" and not out.get("email"):
+                out["email"] = str(value).strip()
+            elif field == "adr" and isinstance(value, list) and len(value) >= 7:
+                def _nv(v: Any) -> str:
+                    return str(v).strip() if v else ""
+                if _nv(value[2]) and not out.get("street"):
+                    out["street"] = _nv(value[2])
+                if _nv(value[3]) and not out.get("city"):
+                    out["city"] = _nv(value[3])
+                if _nv(value[4]) and not out.get("state"):
+                    out["state"] = _nv(value[4])
+                if _nv(value[5]) and not out.get("postal_code"):
+                    out["postal_code"] = _nv(value[5])
+                if _nv(value[6]) and not out.get("country"):
+                    out["country"] = _nv(value[6])
+        return out
 
     @staticmethod
     def _extract_vcard_field(entity: dict[str, Any], field_name: str) -> str | None:
