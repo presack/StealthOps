@@ -23,12 +23,12 @@ services:
       - "127.0.0.1:8001:8000"
     environment:
       - SECRET_KEY=${CTFD_SECRET_KEY}
-      - DATABASE_URL=sqlite:////var/data/ctfd.db
+      - DATABASE_URL=sqlite:////var/data/CTFd/ctfd.db
       - UPLOAD_FOLDER=/var/uploads
       - REVERSE_PROXY=true
       - APPLICATION_ROOT=/ctf
     volumes:
-      - ctfd_data:/var/data
+      - ctfd_data:/var/data/CTFd
       - ctfd_uploads:/var/uploads
 
 volumes:
