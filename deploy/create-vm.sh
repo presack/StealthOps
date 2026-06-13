@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# create-vm.sh — provision a GCP e2-small for a StealthOps training deployment
+# create-vm.sh — provision a GCP e2-medium for a StealthOps + CTFd training deployment
 #
 # Usage:
 #   bash deploy/create-vm.sh <deployment-name> <project-id> [zone]
@@ -39,7 +39,7 @@ fi
 # Derive region from zone: strip the trailing -<letter>
 REGION="${ZONE%-*}"
 INSTANCE="stealthops-${DEPLOYMENT}"
-MACHINE="e2-small"
+MACHINE="e2-medium"
 DISK_GB=20
 
 echo "==> [1/3] Creating VM: $INSTANCE ($MACHINE, $ZONE)"

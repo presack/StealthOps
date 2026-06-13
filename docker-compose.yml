@@ -16,5 +16,22 @@ services:
       - cache_data:/data/cache
     restart: unless-stopped
 
+  ctfd:
+    image: ctfd/ctfd:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8001:8000"
+    environment:
+      - SECRET_KEY=${CTFD_SECRET_KEY}
+      - DATABASE_URL=sqlite:////var/data/ctfd.db
+      - UPLOAD_FOLDER=/var/uploads
+      - REVERSE_PROXY=true
+      - APPLICATION_ROOT=/ctf
+    volumes:
+      - ctfd_data:/var/data
+      - ctfd_uploads:/var/uploads
+
 volumes:
   cache_data:
+  ctfd_data:
+  ctfd_uploads:
