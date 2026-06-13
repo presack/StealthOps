@@ -458,8 +458,14 @@ class StealthQueryEngine:
                 cls._raw_first_value(raw_whois, ["Registry Expiry Date", "Expiration Date", "Domain expires"])
             )
 
+        registrar = cls._first_non_empty(data, ["registrar"])
+        if not registrar:
+            registrar = cls._raw_first_value(raw_whois, ["Registrar", "Registrar Name"])
+
         lines: list[str] = []
         lines.append(f"Domain Name: {str(domain_name).upper()}")
+        if registrar:
+            lines.append(f"Registrar:                   {registrar}")
         lines.append("")
         lines.extend(
             cls._build_contact_block(
@@ -812,11 +818,13 @@ class StealthQueryEngine:
                         if not isinstance(entity, dict):
                             continue
                         roles = [str(r).lower() for r in entity.get("roles", [])]
-                        for role_key in ("registrant", "administrative", "technical"):
-                            if role_key in roles and role_key not in contacts:
+                        # Map RDAP role names to the keys _build_contact_block expects.
+                        rdap_to_contact_key = {"registrant": "registrant", "administrative": "admin", "technical": "tech"}
+                        for rdap_role, contact_key in rdap_to_contact_key.items():
+                            if rdap_role in roles and contact_key not in contacts:
                                 contact_data = cls._vcard_contact(entity)
                                 if contact_data:
-                                    contacts[role_key] = contact_data
+                                    contacts[contact_key] = contact_data
                     if contacts:
                         normalized["contacts"] = contacts
             except Exception:
