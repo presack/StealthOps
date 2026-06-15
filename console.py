@@ -294,11 +294,17 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 from keystore import run_setup_wizard
                 run_setup_wizard()
             elif len(parts) == 3:
-                from keystore import set_key as _ks_set, WIZARD_ORDER as _WO
+                from keystore import set_key as _ks_set, set_config as _ks_set_cfg, WIZARD_ORDER as _WO, _CONFIG_BY_NAME as _CFG
                 provider_arg = parts[1].lower()
-                if provider_arg not in _WO:
-                    print(f"error: unknown provider '{parts[1]}'")
-                    print(f"  known providers: {', '.join(_WO)}")
+                if provider_arg in _CFG:
+                    if _ks_set_cfg(provider_arg, parts[2]):
+                        print(f"config saved for {parts[1]}")
+                    else:
+                        print(f"error: could not save config for '{parts[1]}'")
+                elif provider_arg not in _WO:
+                    print(f"error: unknown provider or config '{parts[1]}'")
+                    known = list(_WO) + list(_CFG.keys())
+                    print(f"  known: {', '.join(known)}")
                 elif _ks_set(provider_arg, parts[2]):
                     print(f"key saved for {parts[1]}")
                 else:
@@ -318,11 +324,17 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
                 print("usage: delete-key <provider>")
                 print("")
                 continue
-            from keystore import delete_key as _ks_del, WIZARD_ORDER as _WO
+            from keystore import delete_key as _ks_del, delete_config as _ks_del_cfg, WIZARD_ORDER as _WO, _CONFIG_BY_NAME as _CFG
             provider_arg = parts[1].lower()
+            if provider_arg in _CFG:
+                _ks_del_cfg(provider_arg)
+                print(f"config cleared for {parts[1]}")
+                print("")
+                continue
             if provider_arg not in _WO:
-                print(f"error: unknown provider '{parts[1]}'")
-                print(f"  known providers: {', '.join(_WO)}")
+                print(f"error: unknown provider or config '{parts[1]}'")
+                known = list(_WO) + list(_CFG.keys())
+                print(f"  known: {', '.join(known)}")
             elif _ks_del(provider_arg):
                 print(f"key removed for {parts[1]}")
             else:

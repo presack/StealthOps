@@ -1861,10 +1861,63 @@ def build_app(
         else:
             # Personal mode — read from keystore
             try:
-                from keystore import get_all as _ks_all
+                from keystore import get_all as _ks_all, _CONFIG_BEFORE as _KS_CFG_BEFORE, get_config as _ks_get_cfg
                 all_keys = _ks_all()
             except ImportError:
                 all_keys = {}
+                _KS_CFG_BEFORE = {}
+                def _ks_get_cfg(name: str) -> dict: return {}  # type: ignore[misc]
+            for provider in _SETTINGS_PROVIDER_ORDER:
+                # Config entries that appear before this provider's key row
+                for cfg_entry in _KS_CFG_BEFORE.get(provider, []):
+                    cfg_info = _ks_get_cfg(cfg_entry["name"])
+                    cfg_source = cfg_info.get("source")
+                    cfg_value = cfg_info.get("value", "")
+                    cfg_display = cfg_entry["display_name"]
+                    cfg_desc = cfg_entry.get("description", "")
+                    cfg_input_id = f"ci_{cfg_entry['name']}"
+                    cfg_field = f"cfg_{cfg_entry['name']}"
+                    if cfg_source == "env":
+                        key_rows_html += (
+                            f"<tr class='border-b border-slate-700/40 last:border-0'>"
+                            f"<td class='py-3 pr-4 align-top w-40'>"
+                            f"<div class='text-sm font-medium text-slate-200'>{html.escape(cfg_display)}</div>"
+                            f"<div class='text-xs text-slate-500 mt-0.5'>{html.escape(cfg_entry['env_var'])}</div>"
+                            f"</td>"
+                            f"<td class='py-3'>"
+                            f"<div class='flex items-center gap-2'>"
+                            f"<code class='text-sm font-mono text-slate-400'>{html.escape(cfg_value)}</code>"
+                            f"<span class='text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 border border-slate-600'>env</span>"
+                            f"</div>"
+                            f"<div class='text-xs text-slate-500 mt-1'>Set via environment variable — add to keys file to make editable here</div>"
+                            f"</td></tr>"
+                        )
+                    else:
+                        placeholder = "Leave blank to keep current" if cfg_value else "Leave blank for default endpoint"
+                        clear_btn = (
+                            f"<button type='submit' name='clear_{html.escape(cfg_field)}' value='1' "
+                            f"class='text-xs text-red-400 hover:text-red-300 px-2 py-1.5 rounded "
+                            f"border border-red-900/50 shrink-0'>Clear</button>"
+                        ) if cfg_value else ""
+                        stored_note = "<div class='text-xs text-slate-500 mt-1'>saved in keys file</div>" if cfg_source == "file" else ""
+                        key_rows_html += (
+                            f"<tr class='border-b border-slate-700/40 last:border-0'>"
+                            f"<td class='py-3 pr-4 align-top w-40'>"
+                            f"<div class='text-sm font-medium text-slate-200'>{html.escape(cfg_display)}</div>"
+                            f"<div class='text-xs text-slate-500 mt-0.5'>{html.escape(cfg_entry['env_var'])}</div>"
+                            f"</td>"
+                            f"<td class='py-3'>"
+                            f"<div class='flex items-center gap-2'>"
+                            f"<input id='{cfg_input_id}' name='{html.escape(cfg_field)}' type='text' "
+                            f"value='{html.escape(cfg_value)}' placeholder='{html.escape(placeholder)}' "
+                            f"autocomplete='off' spellcheck='false' "
+                            f"class='flex-1 min-w-0 rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-sm font-mono'/>"
+                            f"{clear_btn}"
+                            f"</div>"
+                            f"<div class='text-xs text-slate-500 mt-1'>{html.escape(cfg_desc)}</div>"
+                            f"{stored_note}"
+                            f"</td></tr>"
+                        )
             for provider in _SETTINGS_PROVIDER_ORDER:
                 spec = PROVIDER_SPECS.get(provider)
                 if not spec or not spec.env_vars:
@@ -2063,6 +2116,25 @@ document.addEventListener('DOMContentLoaded', function() {{ showSection('{html.e
         form_data = await request.form()
         username = getattr(request.state, "username", "") if server_mode else ""
         changes = 0
+
+        # Config entries (non-key settings, personal mode only — server mode uses env vars)
+        if not server_mode:
+            try:
+                from keystore import set_config as _ks_set_cfg, delete_config as _ks_del_cfg, CONFIG_ENTRIES as _KS_CFG
+            except ImportError:
+                _KS_CFG = []
+                def _ks_set_cfg(name: str, value: str) -> bool: return False  # type: ignore[misc]
+                def _ks_del_cfg(name: str) -> bool: return False  # type: ignore[misc]
+            for cfg_entry in _KS_CFG:
+                cfg_field = f"cfg_{cfg_entry['name']}"
+                if str(form_data.get(f"clear_{cfg_field}", "")).strip():
+                    _ks_del_cfg(cfg_entry["name"])
+                    changes += 1
+                    continue
+                value = str(form_data.get(cfg_field, "")).strip()
+                if value:
+                    _ks_set_cfg(cfg_entry["name"], value)
+                    changes += 1
 
         for provider in _SETTINGS_PROVIDER_ORDER:
             spec = PROVIDER_SPECS.get(provider)

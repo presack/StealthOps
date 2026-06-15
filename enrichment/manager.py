@@ -25,6 +25,7 @@ from .providers import (
     urlscan,
     viewdns,
     virustotal,
+    wayback,
 )
 from .providers._shared import classify_target
 
@@ -46,6 +47,7 @@ _PROVIDER_ADAPTERS = {
     "spamhaus": spamhaus,
     "ripestat": ripestat,
     "bgpview": bgpview,
+    "wayback": wayback,
 }
 
 
@@ -76,6 +78,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "spamhaus": ProviderSpec("spamhaus", "Spamhaus ASN-DROP", (), True, ("asn",)),
     "ripestat": ProviderSpec("ripestat", "RIPEstat", (), True, ("asn",)),
     "bgpview": ProviderSpec("bgpview", "BGPView", (), True, ("asn",)),
+    "wayback": ProviderSpec("wayback", "Wayback Machine", (), True, ("domain",)),
 }
 
 PROVIDER_ALIASES: dict[str, str] = {
@@ -108,6 +111,9 @@ PROVIDER_ALIASES: dict[str, str] = {
     "bgpview": "bgpview",
     "bv": "bgpview",
     "otx": "otx",
+    "wayback": "wayback",
+    "wb": "wayback",
+    "ar": "wayback",
 }
 
 SELECTION_ALIAS_TOKENS = {"all-enabled"}

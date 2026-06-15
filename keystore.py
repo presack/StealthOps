@@ -4,6 +4,7 @@ Keys are stored as ENV_VAR=value pairs. load_into_environ() is called at startup
 to inject file keys into os.environ (existing env vars take precedence).
 
 NOTE: WIZARD_ORDER and the order used in web_ui.py's _SETTINGS_PROVIDER_ORDER must stay in sync.
+CONFIG_ENTRIES applies to all interfaces (wizard, console set-key, web UI).
 """
 
 from __future__ import annotations
@@ -30,6 +31,30 @@ WIZARD_ORDER = [
     "dnsdumpster",
     "securitytrails",
 ]
+
+# Non-key configuration values shown inline with provider key rows in all UIs.
+# Stored in keys.env so users can set them without editing environment variables.
+# "before" means the entry appears just above the named provider's key row.
+CONFIG_ENTRIES: list[dict] = [
+    {
+        "name": "dnsdb_root",
+        "env_var": "DNSDB_API_ROOT",
+        "display_name": "DNSDB API Root",
+        "before": "dnsdb",
+        "is_url": True,
+        "description": (
+            "Custom DNSDB API root URL, e.g. https://fsi-NNNN.dnsdb.info/dnsdb/v2. "
+            "Leave blank to use the default public endpoint (https://api.dnsdb.info/dnsdb/v2)."
+        ),
+    },
+]
+
+# Lookup tables built once from CONFIG_ENTRIES
+_CONFIG_BY_NAME: dict[str, dict] = {e["name"]: e for e in CONFIG_ENTRIES}
+# provider → list of config entries that appear before that provider's key row
+_CONFIG_BEFORE: dict[str, list[dict]] = {}
+for _ce in CONFIG_ENTRIES:
+    _CONFIG_BEFORE.setdefault(_ce.get("before", ""), []).append(_ce)
 
 _TARGET_LABELS: dict[tuple[str, ...], str] = {
     ("ip", "domain", "url"): "IP · Domain · URL",
@@ -137,6 +162,48 @@ def delete_key(provider: str) -> bool:
     return set_key(provider, "")
 
 
+def set_config(name: str, value: str) -> bool:
+    """Save or clear a CONFIG_ENTRIES value by its name. Returns False if unknown."""
+    entry = _CONFIG_BY_NAME.get(name)
+    if not entry:
+        return False
+    env_var = entry["env_var"]
+    data = _read_file()
+    if value:
+        data[env_var] = value
+        os.environ[env_var] = value
+    else:
+        data.pop(env_var, None)
+        os.environ.pop(env_var, None)
+    _write_file(data)
+    return True
+
+
+def delete_config(name: str) -> bool:
+    return set_config(name, "")
+
+
+def get_config(name: str) -> dict:
+    """Return info dict for a single CONFIG_ENTRIES value (includes value and source)."""
+    entry = _CONFIG_BY_NAME.get(name)
+    if not entry:
+        return {}
+    env_var = entry["env_var"]
+    file_data = _read_file()
+    file_value = file_data.get(env_var, "")
+    env_value = os.environ.get(env_var, "")
+    if file_value:
+        source: str | None = "file"
+        value = file_value
+    elif env_value:
+        source = "env"
+        value = env_value
+    else:
+        source = None
+        value = ""
+    return {**entry, "value": value, "source": source}
+
+
 def mask(value: str) -> str:
     if not value:
         return ""
@@ -198,6 +265,30 @@ def run_setup_wizard() -> None:
     changes = 0
 
     for provider in WIZARD_ORDER:
+        # Config entries that appear before this provider's key row
+        for cfg in _CONFIG_BEFORE.get(provider, []):
+            cfg_info = get_config(cfg["name"])
+            cfg_source = cfg_info.get("source")
+            cfg_current = cfg_info.get("value", "")
+            cfg_display = cfg["display_name"]
+            if cfg_source == "env":
+                print(f"  {cfg_display:<22} {cfg_current!r}  [env — skipping]")
+                continue
+            suffix = f" [{cfg_current!r}]" if cfg_current else " [not set — blank uses default]"
+            prompt = f"  {cfg_display}{suffix}: "
+            try:
+                new_val = input(prompt).strip()
+            except (EOFError, KeyboardInterrupt):
+                print("")
+                return
+            if new_val.lower() == "done":
+                return
+            if new_val == "":
+                continue
+            set_config(cfg["name"], new_val)
+            changes += 1
+            print("  [saved]")
+
         info = all_keys.get(provider)
         if not info:
             continue

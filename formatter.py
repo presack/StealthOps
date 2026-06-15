@@ -581,7 +581,7 @@ def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
             "virustotal": "91", "abuseipdb": "31;103", "greynoise": "30;107", "censys": "96",
             "shodan": "94", "spur": "95", "mxtoolbox": "92", "viewdns": "93",
             "dnsdb": "96;44", "dnsdumpster": "36", "securitytrails": "34;103",
-            "spamhaus": "97;41", "ripestat": "36;44",
+            "spamhaus": "97;41", "ripestat": "36;44", "wayback": "33",
         }
         return _c(True, f"[{name}]", palette.get(name, "97"))
 
@@ -1114,6 +1114,38 @@ def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
             if payload.get(key):
                 lines.append(f"- {key}: {payload.get(key)}")
 
+    def wayback_render(provider: str, payload: dict, lines: list[str], use_color: bool) -> None:
+        lines.append(provider_header(provider, use_color))
+        append_summary(payload, lines)
+        if payload.get("error"):
+            lines.append(f"- error: {payload.get('error')}")
+            return
+        if payload.get("note"):
+            lines.append(f"- note: {payload.get('note')}")
+        for key in ("target_type", "domain"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                lines.append(f"- {key}: {value}")
+        if payload.get("first_seen"):
+            lines.append(f"- first_seen: {payload['first_seen']}")
+        if payload.get("last_seen"):
+            lines.append(f"- last_seen: {payload['last_seen']}")
+        if payload.get("archive_months") is not None:
+            lines.append(f"- archive_months: {payload['archive_months']}")
+        status = payload.get("status_codes")
+        if isinstance(status, dict) and status:
+            parts = ", ".join(f"{code}={count}" for code, count in sorted(status.items()))
+            lines.append(f"- status_codes: {parts}")
+        urls = payload.get("unique_urls")
+        if urls is not None:
+            cap_note = " (limit reached — more exist)" if payload.get("url_cap_hit") else ""
+            lines.append(f"- unique_urls: {urls}{cap_note}")
+        render_list_field(lines, "subdomains", payload.get("subdomains", []), cap=50, provider=provider)
+        render_list_field(lines, "notable_paths", payload.get("notable_paths", []), cap=20, provider=provider)
+        for key in ("timeline_error", "url_discovery_error"):
+            if payload.get(key):
+                lines.append(f"- {key}: {payload[key]}")
+
     use_color = bool(enrichment_data.get("_use_color"))
     lines: list[str] = []
     lines.append("=== ENRICHMENT ONLY ===  [source: optional provider APIs]")
@@ -1148,6 +1180,7 @@ def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
             "securitytrails": securitytrails_render,
             "spamhaus": spamhaus_render,
             "ripestat": ripestat_render,
+            "wayback": wayback_render,
         }
         renderer = renderers.get(provider)
         if renderer:

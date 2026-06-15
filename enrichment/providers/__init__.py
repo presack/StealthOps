@@ -18,6 +18,7 @@ from . import (
     urlscan,
     viewdns,
     virustotal,
+    wayback,
 )
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     "urlscan",
     "viewdns",
     "virustotal",
+    "wayback",
 ]
