@@ -75,7 +75,7 @@ def _fetch_urls(domain: str) -> dict[str, Any]:
     resp = requests.get(
         _CDX_BASE,
         params={
-            "url": f"*.{domain}",
+            "url": domain,
             "output": "json",
             "fl": "original,timestamp",
             "matchType": "domain",
