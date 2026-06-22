@@ -110,10 +110,17 @@ def _fetch_urls(domain: str) -> dict[str, Any]:
         except Exception:
             continue
 
+    sorted_subs = sorted(subdomains)
+    notable_subdomains = [
+        sub for sub in sorted_subs
+        if any(seg in _NOTABLE_SEGMENTS for seg in sub.split("."))
+    ]
+
     return {
         "unique_urls": len(url_data),
         "url_cap_hit": len(url_data) >= _URL_LIMIT,
-        "subdomains": sorted(subdomains),
+        "subdomains": sorted_subs,
+        "notable_subdomains": notable_subdomains,
         "notable_paths": notable_paths,
     }
 
@@ -167,9 +174,11 @@ def summary(payload: dict[str, Any]) -> str:
 
     subs = payload.get("subdomains") or []
     subs_str = f" | {len(subs)} subdomain{'s' if len(subs) != 1 else ''}" if subs else ""
+    notable_subs = payload.get("notable_subdomains") or []
+    notable_subs_str = f" | {len(notable_subs)} notable subdomain{'s' if len(notable_subs) != 1 else ''}" if notable_subs else ""
 
     if first == "-" and last == "-":
         note = payload.get("timeline_error", "timeline unavailable")
-        return f"wayback timeline_error ({note[:60]}){urls_str}{subs_str}"
+        return f"wayback timeline_error ({note[:60]}){urls_str}{subs_str}{notable_subs_str}"
 
-    return f"First archived: {first} | Last: {last}{months_str}{urls_str}{subs_str}"
+    return f"First archived: {first} | Last: {last}{months_str}{urls_str}{subs_str}{notable_subs_str}"

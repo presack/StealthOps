@@ -2,37 +2,37 @@
 
 ## Planned
 
-### Polish: Drop `uuid` column from urlscan recent_scans table (web UI)
 
-**File:** `web_ui.py` (`provider_specific` dict, `render_dict_list_table`)
+### Improvement: Wire SQLite cache into CLI single-shot mode
 
-The `uuid` column in the urlscan enrichment table is redundant — `result_url` already links directly to the scan (the URL path embeds the UUID). The column consumes space without adding value visible to the analyst.
+**File:** `main.py`, `runner.py`
 
-**Fix:** Remove `"uuid"` from the `("urlscan", "recent_scans")` column list in `provider_specific`:
+The SQLite result cache is used by the console and web UI but not by the CLI — `execute_query` in `runner.py` calls `query_engine.run_all()` directly with no cache read or write. This means CLI queries never benefit from recent console/web results and vice versa.
 
-```python
-("urlscan", "recent_scans"): ["time", "domain", "ip", "score", "result_url"],
+**Fix:** In `execute_query` (or in `run_cli` before calling it), check `_cache_module.get(target, "full")` first and serve from cache if fresh. Write the result back after a live fetch. Add `--no-cache` to the `query options` arg group in `parse_args()` to bypass the cache read for that invocation (write still happens).
+
+```powershell
+python main.py example.com          # serves from cache if fresh
+python main.py example.com --no-cache  # always fetches live, refreshes cache
 ```
-
-This brings the table to 5 columns, giving the remaining columns more breathing room. The `uuid` field remains in the raw payload (not removed from `urlscan.py`) in case it is useful in the future or accessed programmatically.
 
 ---
 
-### Polish: Prompt to restart after self-update
+### Consider: Wayback Machine — surface `unique_urls` list in output
 
-**Files:** `console.py` (update command handler), `updater.py` (`do_update`)
+**File:** `enrichment/providers/wayback.py`, `formatter.py`
 
-After `do_update()` succeeds in the console, prompt the user before restarting:
+Currently `unique_urls` is a count only — the actual URL list is never returned to the caller. Consider whether to expose it.
 
-```
-Update applied — restart now to use v1.1.12? [y/N]
-```
+**Options:**
 
-If yes: `os.execv(sys.executable, sys.argv)` re-execs the new binary in-place.
+1. **Return the list, cap-truncated with `full` expansion** — same pattern as DNSDumpster subdomains or ViewDNS reverse-IP results. `_fetch_urls` already has all the raw URLs; they just aren't included in the payload. Add `"urls": [...]` to the returned dict (capped at e.g. 50 in normal output, uncapped under `full`), and render in `wayback_render` with the same truncation + "N more (use `full`)" footer used elsewhere.
 
-**What survives a restart:** SQLite query cache (6h TTL), API keys (`keys.env`). **What resets:** in-memory console state (`enrich` mode, `stealth`/`public` mode, `json on/off`, session history for `last`/`reload`) — all reset to safe defaults, acceptable.
+2. **Skip the list, keep counts only** — the notable_paths list already surfaces the highest-signal URLs (login pages, admin panels, etc.). The full URL list may be low signal for most domains and bloat the output significantly for heavily-crawled targets.
 
-Don't auto-restart without the prompt. The current `update` flow already has one confirmation step (user types `update`); silently re-executing a freshly downloaded binary after that crosses a trust line. The prompt is two characters of friction and keeps the user in control.
+**Recommendation:** Option 1, but only after validating what the URL list looks like for a variety of real targets (high-traffic domains, parked/seized domains, phishing domains). The count-only approach may be fine if `notable_paths` captures the interesting cases.
+
+---
 
 ### Feature: ASN query support in core pipeline
 
@@ -59,32 +59,6 @@ Don't auto-restart without the prompt. The current `update` flow already has one
 **`_normalize_lookup_target`:** strip leading `AS`/`as` before returning for ASN targets so the display target stays readable but routing is unambiguous.
 
 **Console UX:** both `36963` and `AS36963` should work identically; `classify_target` already normalizes both forms.
-
-### Improvement: Bulk triage — fix blank ASN, N/A for inapplicable columns, domain network data
-
-**Files:** `bulk.py`, `bulk.py:TRIAGE_PRESET_PROVIDERS`
-
-Three related issues discovered while triaging IP indicators:
-
-**1. ASN blank for RIPE/APNIC/LACNIC IPs**
-
-`network_whois` (RDAP) often omits origin ASN for non-ARIN ranges. The ASN column stays blank even though ipinfo (already a free, no-key-required provider) returns `asn` (e.g. `"AS13335"`) for every IP.
-
-Fix:
-- Add `"ipinfo"` to `TRIAGE_PRESET_PROVIDERS` so it runs by default on bulk IP queries (no key required, negligible cost).
-- In `flatten_result` for IP targets, fall back to `ipinfo.get("asn")` when `nw.get("asn")` is empty. Also pull `org_name` from ipinfo as fallback for Organization when RDAP org is empty.
-
-**2. Domain-specific columns blank vs. "N/A" for IP targets**
-
-When the target is an IP, columns that require a domain registration (Registrar, Created, Expires, Domain Status, Nameservers, MX Hosts) are structurally impossible to populate — they're not just empty, they don't apply. Blank is ambiguous; "N/A" communicates intent and makes it easier to spot genuinely missing data vs. intentionally skipped fields.
-
-Fix: in `flatten_result`, set those six columns to `"N/A"` for IP targets, and set CIDR/ASN to `"N/A"` for domain targets only if `network_whois` also returned nothing (i.e. couldn't resolve an IP).
-
-**3. Domain rows missing ASN/Org/Country/CIDR**
-
-`flatten_result` only pulls `network_whois` fields (ASN, Organization, Country, CIDR) for `target_type == "ip"`. But `run_all` also runs `network_whois_lookup` for domain targets via their resolved A record — the data is already in the result dict. Domain rows should populate those columns the same way IP rows do.
-
-Fix: move the `nw` field extraction (ASN, Organization, Country, CIDR) outside the `if target_type == "ip"` block so it applies to all target types, then let the N/A logic above handle the columns that truly don't apply.
 
 ### Feature: `draw` command — link chart export to draw.io
 

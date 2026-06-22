@@ -388,7 +388,7 @@ def build_app(
                 field_key_l = field_key.strip().lower()
                 provider_specific: dict[tuple[str, str], list[str]] = {
                     ("virustotal", "malicious_or_suspicious_findings"): ["engine", "category", "result", "method"],
-                    ("urlscan", "recent_scans"): ["time", "domain", "ip", "score", "result_url", "uuid"],
+                    ("urlscan", "recent_scans"): ["time", "domain", "ip", "score", "result_url"],
                     ("securitytrails", "current_ns_records"): ["nameserver", "nameserver_organization", "nameserver_count"],
                     ("securitytrails", "current_mx_records"): ["priority", "hostname", "hostname_organization"],
                     ("securitytrails", "current_txt_records"): ["value"],

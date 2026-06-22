@@ -267,7 +267,15 @@ def run_console(args: argparse.Namespace, tor_engine: TorEngine) -> int:
         if cmd == "update":
             from updater import do_update
             try:
-                do_update(use_color)
+                new_tag = do_update(use_color)
+                if new_tag:
+                    try:
+                        ans = input(f"  Restart now to use {new_tag}? [y/N] ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        ans = ""
+                    if ans == "y":
+                        import os as _os
+                        _os.execv(sys.executable, sys.argv)
             except KeyboardInterrupt:
                 _print_interrupted()
             continue

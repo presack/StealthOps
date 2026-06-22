@@ -188,12 +188,15 @@ def format_cli_report(result: dict, full: bool = False) -> str:
     lines.append("=== WHOIS ===  [source: whois <domain>]")
     whois_record = str(whois_data.get("domain_whois_record", "")).strip()
     whois_error = str(whois_data.get("whois_error", "")).strip()
+    whois_sparse = str(whois_data.get("whois_sparse_warning", "")).strip()
     if whois_record:
         lines.extend(whois_record.splitlines())
     elif whois_error:
         lines.append(f"WHOIS Error: {whois_error}")
     else:
         lines.append("Awaiting data...")
+    if whois_sparse:
+        lines.append(f"[!] WHOIS: {whois_sparse}")
 
     lines.append("")
     lines.append("=== DNS SUMMARY ===  [source: dns query A/AAAA]")
@@ -1141,6 +1144,7 @@ def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
             cap_note = " (limit reached — more exist)" if payload.get("url_cap_hit") else ""
             lines.append(f"- unique_urls: {urls}{cap_note}")
         render_list_field(lines, "subdomains", payload.get("subdomains", []), cap=50, provider=provider)
+        render_list_field(lines, "notable_subdomains", payload.get("notable_subdomains", []), cap=20, provider=provider)
         render_list_field(lines, "notable_paths", payload.get("notable_paths", []), cap=20, provider=provider)
         for key in ("timeline_error", "url_discovery_error"):
             if payload.get(key):

@@ -117,6 +117,30 @@ class StealthQueryEngine:
         return line
 
     @staticmethod
+    def _annotate_sparse_whois(result: dict[str, Any]) -> dict[str, Any]:
+        """Add whois_sparse_warning if the WHOIS payload is below minimum viable field count.
+
+        A sparse record (e.g. only Domain Name returned) looks like a valid result
+        but is actually a deletion or pending-delete signal from the registry.
+        """
+        if result.get("whois_error"):
+            return result
+        meaningful = [
+            result.get("registrar"),
+            result.get("creation_date"),
+            result.get("expiration_date") or result.get("expiry_date"),
+            result.get("name_servers"),
+        ]
+        populated = sum(1 for f in meaningful if f)
+        if populated < 2:
+            result = dict(result)
+            result["whois_sparse_warning"] = (
+                f"sparse record — only {populated} of 4 core field(s) returned "
+                "(domain may be deleted, pending-delete, or registry withheld data)"
+            )
+        return result
+
+    @staticmethod
     def _is_transient_whois_error(value: Any) -> bool:
         text = str(value or "").lower()
         markers = (
@@ -1760,7 +1784,10 @@ class StealthQueryEngine:
             for future in as_completed(list(future_map.keys())):
                 key = future_map[future]
                 try:
-                    out[key] = future.result()
+                    result = future.result()
+                    if key == "whois" and isinstance(result, dict):
+                        result = self._annotate_sparse_whois(result)
+                    out[key] = result
                 except Exception as exc:
                     if key == "headers":
                         out[key] = {"url": target, "header_error": self._short_error(exc), "tor_routed": self.config.route_mode == "stealth"}

@@ -140,7 +140,7 @@ def cleanup_old_binary() -> None:
         pass
 
 
-def do_update(use_color: bool = True) -> None:
+def do_update(use_color: bool = True) -> str | None:
     """Interactive update: fetch latest GitHub release and replace the running binary."""
     if not getattr(sys, "frozen", False):
         print("Source install — download the latest release from:")
@@ -256,3 +256,4 @@ def do_update(use_color: bool = True) -> None:
 
     print(f"[update] updated to {tag} — restart StealthOps to use the new version")
     print("")
+    return tag

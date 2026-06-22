@@ -40,7 +40,7 @@ TRIAGE_COLUMNS = [
 ]
 
 # Pre-checked provider set on the web UI triage form
-TRIAGE_PRESET_PROVIDERS = {"virustotal", "abuseipdb", "greynoise", "otx"}
+TRIAGE_PRESET_PROVIDERS = {"virustotal", "abuseipdb", "greynoise", "otx", "ipinfo"}
 
 
 def _safe(value: object) -> str:
@@ -91,6 +91,9 @@ def flatten_result(target: str, result: dict) -> dict[str, str]:
         row["Organization"] = _safe(nw.get("organization"))
         row["Country"] = _safe(nw.get("country"))
         row["CIDR"] = _safe(nw.get("cidr"))
+        # Registration fields don't apply to IP targets
+        for col in ("Registrar", "Created", "Expires", "Domain Status", "Nameservers", "MX Hosts"):
+            row[col] = "N/A"
 
     elif target_type == "domain":
         a_records = dns.get("a") or []
@@ -108,6 +111,15 @@ def flatten_result(target: str, result: dict) -> dict[str, str]:
         mx_list = mx_data.get("mx") or []
         hosts = [str(m.get("host", "")) for m in mx_list if isinstance(m, dict)]
         row["MX Hosts"] = _join(hosts, 2)
+        # Network data is available for domains via the resolved A record
+        if nw and not nw.get("network_whois_error"):
+            row["ASN"] = _safe(nw.get("asn"))
+            row["Organization"] = _safe(nw.get("organization"))
+            row["Country"] = _safe(nw.get("country"))
+            row["CIDR"] = _safe(nw.get("cidr"))
+        else:
+            row["ASN"] = "N/A"
+            row["CIDR"] = "N/A"
 
     elif target_type == "asn":
         row["ASN"] = f"AS{normalized}"
@@ -153,10 +165,16 @@ def flatten_result(target: str, result: dict) -> dict[str, str]:
             ports = shodan.get("open_port_count")
             row["Shodan"] = f"{ports} open ports" if ports is not None else ""
 
-    # ipinfo (IP only — city geo detail)
+    # ipinfo (IP only — city, and ASN/Org fallback for RIPE/APNIC/LACNIC ranges
+    # where RDAP omits origin ASN)
     ipinfo = providers.get("ipinfo") or {}
     if ipinfo and not ipinfo.get("error") and not ipinfo.get("unsupported_target_type"):
         row["City"] = _safe(ipinfo.get("city"))
+        if target_type == "ip":
+            if not row["ASN"]:
+                row["ASN"] = _safe(ipinfo.get("asn"))
+            if not row["Organization"]:
+                row["Organization"] = _safe(ipinfo.get("org"))
 
     # AlienVault OTX (IP + domain — threat feed pulse count)
     otx = providers.get("otx") or {}
