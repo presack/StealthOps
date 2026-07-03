@@ -157,9 +157,13 @@ if (-not $NoWsl -and $LinuxDest -and (Get-Command wsl -ErrorAction SilentlyConti
         $WinKeysDir = Join-Path $env:LOCALAPPDATA "StealthOps"
         $WslKeysDir = (wsl wslpath -u ($WinKeysDir -replace '\\', '/')).Trim()
 
-        # Both paths are passed as env vars so the single-quoted here-string
-        # (which PowerShell does not interpolate) can reference them in bash.
-        $BashScript = @'
+        # `wsl env VAR=val bash -c <script>` does not actually pass VAR into the
+        # script's bash environment -- wsl.exe rebuilds the command line when
+        # relaying to the Linux side and the env passthrough doesn't survive it.
+        # So the values are substituted directly into the script text instead,
+        # written to a temp file, and run by path.
+        $VarLines = "STEALTHOPS_SRC='$WslSrc'`nSTEALTHOPS_KEYS_DIR='$WslKeysDir'`n"
+        $BashBody = @'
 set -e
 chmod +x "$STEALTHOPS_SRC"
 mkdir -p ~/.local/bin
@@ -184,7 +188,11 @@ if [ -f ~/.zshrc ]; then
     || echo "$KEYS_LINE" >> ~/.zshrc
 fi
 '@
-        wsl env "STEALTHOPS_SRC=$WslSrc" "STEALTHOPS_KEYS_DIR=$WslKeysDir" bash -c $BashScript
+        $TempScript = Join-Path $env:TEMP "stealthops-wsl-setup.sh"
+        Set-Content -Path $TempScript -Value ($VarLines + $BashBody) -NoNewline -Encoding utf8
+        $WslScriptPath = (wsl wslpath -u ($TempScript -replace '\\', '/')).Trim()
+        wsl bash $WslScriptPath
+        Remove-Item $TempScript -Force -ErrorAction SilentlyContinue
         Write-Ok "Symlinked in WSL2 ~/.local/bin/stealthops"
         Write-Ok "WSL2 will share API keys with Windows ($WslKeysDir)"
         $WslConfigured = $true
