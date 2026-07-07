@@ -388,7 +388,7 @@ def build_app(
                 field_key_l = field_key.strip().lower()
                 provider_specific: dict[tuple[str, str], list[str]] = {
                     ("virustotal", "malicious_or_suspicious_findings"): ["engine", "category", "result", "method"],
-                    ("urlscan", "recent_scans"): ["time", "domain", "country", "ip", "result_url"],
+                    ("urlscan", "recent_scans"): ["time", "url", "country", "ip", "result_url"],
                     ("securitytrails", "current_ns_records"): ["nameserver", "nameserver_organization", "nameserver_count"],
                     ("securitytrails", "current_mx_records"): ["priority", "hostname", "hostname_organization"],
                     ("securitytrails", "current_txt_records"): ["value"],
@@ -403,33 +403,39 @@ def build_app(
                     ("dnsdumpster", "mx"): ["host", "ip", "asn", "asn_name", "country"],
                     ("ripestat", "announced_prefixes"): ["prefix", "first_seen", "last_seen", "events"],
                 }
-                preferred = provider_specific.get((provider_key, field_key_l), [
-                    "engine",
-                    "category",
-                    "result",
-                    "command",
-                    "hostname",
-                    "nameserver",
-                    "priority",
-                    "ip",
-                    "domain",
-                    "time",
-                    "score",
-                    "value",
-                    "type",
-                    "port",
-                    "protocol",
-                    "service",
-                    "error",
-                ])
+                curated = provider_specific.get((provider_key, field_key_l))
                 keys_seen: list[str] = []
                 for item in dict_list:
                     for key in item.keys():
                         if isinstance(key, str) and key not in keys_seen:
                             keys_seen.append(key)
-                ordered = [k for k in preferred if k in keys_seen]
-                extras = sorted([k for k in keys_seen if k not in ordered])
-                columns = (ordered + extras)[:6]
+                if curated is not None:
+                    # Curated column lists are deliberate — don't pad with
+                    # leftover fields the provider happens to also return.
+                    columns = [k for k in curated if k in keys_seen]
+                else:
+                    preferred = [
+                        "engine",
+                        "category",
+                        "result",
+                        "command",
+                        "hostname",
+                        "nameserver",
+                        "priority",
+                        "ip",
+                        "domain",
+                        "time",
+                        "score",
+                        "value",
+                        "type",
+                        "port",
+                        "protocol",
+                        "service",
+                        "error",
+                    ]
+                    ordered = [k for k in preferred if k in keys_seen]
+                    extras = sorted([k for k in keys_seen if k not in ordered])
+                    columns = (ordered + extras)[:6]
                 if not columns:
                     return "<span class='text-slate-500'>-</span>"
 

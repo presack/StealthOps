@@ -502,7 +502,7 @@ def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
         label_key = label.strip().lower()
         provider_specific: dict[tuple[str, str], list[str]] = {
             ("virustotal", "findings"): ["engine", "category", "result", "method"],
-            ("urlscan", "recent_scans"): ["time", "domain", "country", "ip", "result_url"],
+            ("urlscan", "recent_scans"): ["time", "url", "country", "ip", "result_url"],
             ("securitytrails", "current_ns_records"): ["nameserver", "nameserver_organization", "nameserver_count"],
             ("securitytrails", "current_mx_records"): ["priority", "hostname", "hostname_organization"],
             ("securitytrails", "current_txt_records"): ["value"],
@@ -521,10 +521,7 @@ def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
             ("dnsdumpster", "mx"): ["host", "ip", "asn", "asn_name", "country"],
             ("ripestat", "announced_prefixes"): ["prefix", "first_seen", "last_seen", "events"],
         }
-        preferred = provider_specific.get((provider_key, label_key), [
-            "engine", "category", "result", "command", "hostname", "nameserver", "priority",
-            "ip", "domain", "time", "score", "value", "type", "port", "protocol", "service", "error",
-        ])
+        curated = provider_specific.get((provider_key, label_key))
         seen: set[str] = set()
         keys: list[str] = []
         for row in rows:
@@ -532,6 +529,14 @@ def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
                 if isinstance(key, str) and key not in seen:
                     seen.add(key)
                     keys.append(key)
+        if curated is not None:
+            # Curated column lists are deliberate — don't pad with leftover
+            # fields the provider happens to also return.
+            return [k for k in curated if k in seen]
+        preferred = [
+            "engine", "category", "result", "command", "hostname", "nameserver", "priority",
+            "ip", "domain", "time", "score", "value", "type", "port", "protocol", "service", "error",
+        ]
         ordered = [k for k in preferred if k in seen]
         extras = sorted([k for k in keys if k not in ordered])
         cols = ordered + extras
@@ -879,14 +884,14 @@ def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
         scans = payload.get("recent_scans", [])
         if isinstance(scans, list) and scans:
             lines.append("- recent_scans:")
-            lines.append("  time                 domain                           country  ip               result")
+            lines.append("  time                 url                              country  ip               result")
             lines.append("  -------------------  -------------------------------  -------  ---------------  ----------------------------")
             max_rows = len(scans) if full else 20
             for scan in scans[:max_rows]:
                 if not isinstance(scan, dict):
                     continue
                 t = trunc(scan.get("time") or "-", 19)
-                d = trunc(scan.get("domain") or "-", 31)
+                d = trunc(scan.get("url") or scan.get("domain") or "-", 31)
                 country = trunc(scan.get("country") or "-", 7)
                 ip = trunc(scan.get("ip") or "-", 15)
                 result_url = trunc(scan.get("result_url") or "", 28)
