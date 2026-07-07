@@ -43,24 +43,16 @@ def run(target: str, key: str) -> dict[str, Any]:
         results = []
     total = payload.get("total") if isinstance(payload, dict) else None
 
+    # Note: the /search/ endpoint never includes a "verdicts" object (that only
+    # exists on the full per-result JSON at /api/v1/result/{uuid}/), so score,
+    # brands, and categories are not obtainable here without an extra API call
+    # per row. We don't fetch those, so this listing carries no risk verdict.
     scans: list[dict[str, Any]] = []
-    malicious_votes = 0
-    suspicious_votes = 0
     for row in results[:max_results]:
         if not isinstance(row, dict):
             continue
         page = row.get("page", {}) if isinstance(row.get("page"), dict) else {}
         task = row.get("task", {}) if isinstance(row.get("task"), dict) else {}
-        verdicts = row.get("verdicts", {}) if isinstance(row.get("verdicts"), dict) else {}
-        overall = verdicts.get("overall", {}) if isinstance(verdicts.get("overall"), dict) else {}
-        score = overall.get("score")
-        categories = overall.get("categories", [])
-        brands = overall.get("brands", [])
-        if isinstance(score, (int, float)):
-            if score >= 50:
-                malicious_votes += 1
-            elif score > 0:
-                suspicious_votes += 1
         scans.append({
             "time": task.get("time"),
             "country": page.get("country"),
@@ -68,17 +60,8 @@ def run(target: str, key: str) -> dict[str, Any]:
             "domain": page.get("domain"),
             "url": page.get("url"),
             "uuid": row.get("_id"),
-            "score": score,
-            "categories": categories if isinstance(categories, list) else [],
-            "brands": brands if isinstance(brands, list) else [],
             "result_url": row.get("result"),
         })
-
-    risk_level = "low"
-    if malicious_votes > 0:
-        risk_level = "high"
-    elif suspicious_votes > 0:
-        risk_level = "medium"
 
     out: dict[str, Any] = {
         "source": "urlscan",
@@ -88,9 +71,6 @@ def run(target: str, key: str) -> dict[str, Any]:
         "total_available": total,
         "max_results_used": max_results,
         "truncated": bool(isinstance(total, int) and total > len(scans)),
-        "risk_level": risk_level,
-        "malicious_hits": malicious_votes,
-        "suspicious_hits": suspicious_votes,
         "recent_scans": scans,
     }
 
@@ -116,5 +96,4 @@ def run(target: str, key: str) -> dict[str, Any]:
 
 def summary(payload: dict[str, Any]) -> str:
     count = payload.get("result_count") or 0
-    risk = payload.get("risk_level", "low")
-    return f"urlscan results={count} risk={risk}"
+    return f"urlscan results={count}"

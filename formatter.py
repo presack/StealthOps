@@ -502,7 +502,7 @@ def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
         label_key = label.strip().lower()
         provider_specific: dict[tuple[str, str], list[str]] = {
             ("virustotal", "findings"): ["engine", "category", "result", "method"],
-            ("urlscan", "recent_scans"): ["time", "domain", "ip", "score", "result_url", "uuid"],
+            ("urlscan", "recent_scans"): ["time", "domain", "country", "ip", "result_url"],
             ("securitytrails", "current_ns_records"): ["nameserver", "nameserver_organization", "nameserver_count"],
             ("securitytrails", "current_mx_records"): ["priority", "hostname", "hostname_organization"],
             ("securitytrails", "current_txt_records"): ["value"],
@@ -871,10 +871,7 @@ def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
         append_summary(payload, lines)
         if payload.get("error"):
             lines.append(f"- error: {payload.get('error')}")
-        risk_level = str(payload.get("risk_level", "low")).lower()
-        sev = "high" if risk_level == "high" else ("medium" if risk_level == "medium" else "low")
-        lines.append(f"- risk_level: {color_severity(risk_level, sev, use_color)}")
-        for key in ("target_type", "query", "result_count", "total_available", "max_results_used", "truncated", "malicious_hits", "suspicious_hits", "submitted_scan", "submitted_uuid", "submitted_result"):
+        for key in ("target_type", "query", "result_count", "total_available", "max_results_used", "truncated", "submitted_scan", "submitted_uuid", "submitted_result"):
             value = payload.get(key)
             if value in (None, "", []):
                 continue
@@ -882,18 +879,18 @@ def format_enrichment_report(enrichment_data: dict, full: bool = False) -> str:
         scans = payload.get("recent_scans", [])
         if isinstance(scans, list) and scans:
             lines.append("- recent_scans:")
-            lines.append("  time                 score  domain                           ip               result")
-            lines.append("  -------------------  -----  -------------------------------  ---------------  ----------------------------")
+            lines.append("  time                 domain                           country  ip               result")
+            lines.append("  -------------------  -------------------------------  -------  ---------------  ----------------------------")
             max_rows = len(scans) if full else 20
             for scan in scans[:max_rows]:
                 if not isinstance(scan, dict):
                     continue
                 t = trunc(scan.get("time") or "-", 19)
                 d = trunc(scan.get("domain") or "-", 31)
+                country = trunc(scan.get("country") or "-", 7)
                 ip = trunc(scan.get("ip") or "-", 15)
-                score = trunc(scan.get("score") if scan.get("score") is not None else "-", 5)
                 result_url = trunc(scan.get("result_url") or "", 28)
-                lines.append(f"  {t:<19}  {score:>5}  {d:<31}  {ip:<15}  {result_url}")
+                lines.append(f"  {t:<19}  {d:<31}  {country:<7}  {ip:<15}  {result_url}")
             if len(scans) > max_rows:
                 lines.append(f"  ... (+{len(scans)-max_rows} more shown in API payload)")
 

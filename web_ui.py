@@ -388,7 +388,7 @@ def build_app(
                 field_key_l = field_key.strip().lower()
                 provider_specific: dict[tuple[str, str], list[str]] = {
                     ("virustotal", "malicious_or_suspicious_findings"): ["engine", "category", "result", "method"],
-                    ("urlscan", "recent_scans"): ["time", "domain", "ip", "score", "result_url"],
+                    ("urlscan", "recent_scans"): ["time", "domain", "country", "ip", "result_url"],
                     ("securitytrails", "current_ns_records"): ["nameserver", "nameserver_organization", "nameserver_count"],
                     ("securitytrails", "current_mx_records"): ["priority", "hostname", "hostname_organization"],
                     ("securitytrails", "current_txt_records"): ["value"],
@@ -439,7 +439,9 @@ def build_app(
                     extra = " xmore hidden" if i >= cap else ""
                     cells: list[str] = []
                     for col in columns:
-                        raw = item.get(col, "-")
+                        raw = item.get(col)
+                        if raw in (None, "", []):
+                            raw = "-"
                         if col == "category":
                             category = str(raw).strip().lower()
                             if category == "malicious":
@@ -450,7 +452,7 @@ def build_app(
                                 cell = html.escape(str(raw))
                         else:
                             cell = html.escape(str(raw))
-                        cell_class = "py-1 align-top whitespace-nowrap" if col in _nowrap_cols else "py-1 align-top break-all"
+                        cell_class = "py-1 pr-3 align-top whitespace-nowrap" if col in _nowrap_cols else "py-1 pr-3 align-top break-all"
                         cells.append(f"<td class='{cell_class}'>{cell}</td>")
                     body_rows.append(f"<tr class='{extra.strip()}'>" + "".join(cells) + "</tr>")
 
