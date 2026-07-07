@@ -587,14 +587,26 @@ def build_app(
                         value = payload.get(key)
                         if value in (None, "", []):
                             continue
-                        rows.append(
-                            "<tr>"
-                            f"<td class='py-1.5 pr-3 align-top text-slate-400 whitespace-nowrap'>{html.escape(str(key))}</td>"
-                            "<td class='py-1.5 align-top text-slate-100 text-xs'>"
-                            + render_enrichment_value(provider, str(key), value)
-                            + "</td>"
-                            "</tr>"
-                        )
+                        # Dict-list values render as a full table (see render_dict_list_table);
+                        # squeezing that into the narrow value column wastes space, so give it
+                        # its own full-width row with the label above instead of beside it.
+                        is_wide_table = isinstance(value, list) and bool(value) and all(isinstance(v, dict) for v in value)
+                        if is_wide_table:
+                            rows.append(
+                                "<tr><td colspan='2' class='py-1.5 align-top text-xs'>"
+                                f"<div class='text-slate-400 mb-1'>{html.escape(str(key))}</div>"
+                                + render_enrichment_value(provider, str(key), value)
+                                + "</td></tr>"
+                            )
+                        else:
+                            rows.append(
+                                "<tr>"
+                                f"<td class='py-1.5 pr-3 align-top text-slate-400 whitespace-nowrap'>{html.escape(str(key))}</td>"
+                                "<td class='py-1.5 align-top text-slate-100 text-xs'>"
+                                + render_enrichment_value(provider, str(key), value)
+                                + "</td>"
+                                "</tr>"
+                            )
                 if is_unsupported:
                     panel_body = "<p class='text-xs text-slate-500 italic'>Not applicable for this target type.</p>"
                 elif rows:
